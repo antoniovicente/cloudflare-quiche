@@ -1461,10 +1461,12 @@ impl Connection {
             body,
             fin,
             |conn: &mut super::Connection<F>,
+             header: &[u8],
              stream_id: u64,
              body: &[u8],
              body_len: usize,
              fin: bool| {
+                conn.stream_send(stream_id, header, false)?;
                 Ok(conn
                     .stream_send(stream_id, &body[..body_len], fin)
                     .map(|v| (v, v))?)
@@ -1491,9 +1493,9 @@ impl Connection {
     ///
     /// [`Done`]: enum.Error.html#variant.Done
     pub fn send_body_zc<F>(
-        &mut self, conn: &mut super::Connection<F>, stream_id: u64, body: F::Buf,
-        fin: bool,
-    ) -> Result<(usize, Option<F::Buf>)>
+        &mut self, conn: &mut super::Connection<F>, stream_id: u64,
+        body: &mut F::Buf, fin: bool,
+    ) -> Result<usize>
     where
         F: BufFactory,
         F::Buf: BufSplit,
@@ -1504,13 +1506,34 @@ impl Connection {
             body,
             fin,
             |conn: &mut super::Connection<F>,
+             header: &[u8],
              stream_id: u64,
-             body: F::Buf,
-             body_len: usize,
+             body: &mut F::Buf,
+             mut body_len: usize,
              fin: bool| {
-                Ok(conn
-                    .stream_send_zc(stream_id, body, Some(body_len), fin)
-                    .map(|v| (v.0, v))?)
+                let with_prefix = body.try_add_prefix(header);
+                if !with_prefix {
+                    conn.stream_send(stream_id, header, false)?;
+                } else {
+                    body_len += header.len();
+                }
+
+                let (mut n, rem) = conn.stream_send_zc(
+                    stream_id,
+                    body.clone(),
+                    Some(body_len),
+                    fin,
+                )?;
+
+                if with_prefix {
+                    n -= header.len();
+                }
+
+                if let Some(rem) = rem {
+                    let _ = std::mem::replace(body, rem);
+                }
+
+                Ok((n, n))
             },
         )
     }
@@ -1524,6 +1547,7 @@ impl Connection {
         B: AsRef<[u8]>,
         SND: FnOnce(
             &mut super::Connection<F>,
+            &[u8],
             u64,
             B,
             usize,
@@ -1598,11 +1622,11 @@ impl Connection {
         b.put_varint(frame::DATA_FRAME_TYPE_ID)?;
         b.put_varint(body_len as u64)?;
         let off = b.off();
-        conn.stream_send(stream_id, &d[..off], false)?;
 
         // Return how many bytes were written, excluding the frame header.
         // Sending body separately avoids unnecessary copy.
-        let (written, ret) = write_fn(conn, stream_id, body, body_len, fin)?;
+        let (written, ret) =
+            write_fn(conn, &d[..off], stream_id, body, body_len, fin)?;
 
         trace!(
             "{} tx frm DATA stream={} len={} fin={}",
