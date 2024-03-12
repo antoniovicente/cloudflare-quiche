@@ -489,7 +489,7 @@ impl Path {
             active: self.active,
             recv: self.recv_count,
             sent: self.sent_count,
-            lost: self.recovery.lost_count(),
+            lost: self.recovery.lost_count,
             retrans: self.retrans_count,
             dgram_recv: self.dgram_recv_count,
             dgram_sent: self.dgram_sent_count,

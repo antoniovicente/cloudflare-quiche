@@ -29,9 +29,11 @@ use std::time::Instant;
 
 use crate::minmax::Minmax;
 
-pub(crate) const INITIAL_RTT: Duration = Duration::from_millis(333);
+use super::GRANULARITY;
 
-pub(crate) const RTT_WINDOW: Duration = Duration::from_secs(300);
+pub const INITIAL_RTT: Duration = Duration::from_millis(333);
+
+const RTT_WINDOW: Duration = Duration::from_secs(300);
 
 pub struct RttStats {
     pub(super) latest_rtt: Duration,
@@ -42,9 +44,19 @@ pub struct RttStats {
 
     pub(super) min_rtt: Minmax<Duration>,
 
-    pub(super) max_ack_delay: Duration,
-
     pub(super) first_rtt_sample: Option<Instant>,
+}
+
+impl Default for RttStats {
+    fn default() -> Self {
+        RttStats {
+            latest_rtt: Duration::ZERO,
+            min_rtt: Minmax::new(Duration::MAX),
+            smoothed_rtt: INITIAL_RTT,
+            rttvar: INITIAL_RTT / 2,
+            first_rtt_sample: None,
+        }
+    }
 }
 
 impl std::fmt::Debug for RttStats {
@@ -59,20 +71,9 @@ impl std::fmt::Debug for RttStats {
 }
 
 impl RttStats {
-    pub(crate) fn new(max_ack_delay: Duration) -> Self {
-        RttStats {
-            latest_rtt: Duration::ZERO,
-            min_rtt: Minmax::new(Duration::ZERO),
-            smoothed_rtt: INITIAL_RTT,
-            rttvar: INITIAL_RTT / 2,
-            first_rtt_sample: None,
-            max_ack_delay,
-        }
-    }
-
     pub(crate) fn update_rtt(
         &mut self, latest_rtt: Duration, mut ack_delay: Duration, now: Instant,
-        handshake_confirmed: bool,
+        handshake_confirmed: bool, max_ack_delay: Duration,
     ) {
         self.latest_rtt = latest_rtt;
 
@@ -89,7 +90,7 @@ impl RttStats {
 
         // Limit ack_delay by max_ack_delay after handshake confirmation.
         if handshake_confirmed {
-            ack_delay = ack_delay.min(self.max_ack_delay);
+            ack_delay = ack_delay.min(max_ack_delay);
         }
 
         // Adjust for acknowledgment delay if plausible.
@@ -115,5 +116,12 @@ impl RttStats {
 
     pub(crate) fn min_rtt(&self) -> Option<Duration> {
         self.min_rtt.ne(&Duration::ZERO).then_some(*self.min_rtt)
+    }
+
+    pub(crate) fn loss_delay(&self, time_thresh: f64) -> Duration {
+        self.latest_rtt
+            .max(self.smoothed_rtt)
+            .mul_f64(time_thresh)
+            .max(GRANULARITY)
     }
 }
