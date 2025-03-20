@@ -29,7 +29,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::frame::Frame;
+use crate::frame;
 use crate::packet;
 use crate::ranges::RangeSet;
 use crate::Config;
@@ -88,8 +88,8 @@ struct RecoveryEpoch {
     loss_probes: usize,
     pkts_in_flight: usize,
 
-    acked_frames: Vec<Frame>,
-    lost_frames: Vec<Frame>,
+    acked_frames: Vec<frame::Frame>,
+    lost_frames: Vec<frame::Frame>,
 }
 
 struct AckedDetectionResult {
@@ -340,7 +340,7 @@ enum SentStatus {
         has_data: bool,
         pmtud: bool,
         sent_bytes: usize,
-        frames: SmallVec<[Frame; 1]>,
+        frames: SmallVec<[frame::Frame; 1]>,
     },
     Acked,
     Lost,
@@ -515,13 +515,13 @@ impl Recovery {
 
     pub fn get_acked_frames(
         &mut self, epoch: packet::Epoch,
-    ) -> impl Iterator<Item = Frame> + '_ {
+    ) -> impl Iterator<Item = frame::Frame> + '_ {
         self.epochs[epoch].acked_frames.drain(..)
     }
 
     pub fn get_lost_frames(
         &mut self, epoch: packet::Epoch,
-    ) -> impl Iterator<Item = Frame> + '_ {
+    ) -> impl Iterator<Item = frame::Frame> + '_ {
         self.epochs[epoch].lost_frames.drain(..)
     }
 
@@ -1106,7 +1106,7 @@ impl std::fmt::Debug for Recovery {
 
 pub struct Sent {
     pub pkt_num: u64,
-    pub frames: SmallVec<[Frame; 1]>,
+    pub frames: SmallVec<[frame::Frame; 1]>,
     pub size: usize,
     pub ack_eliciting: bool,
     pub in_flight: bool,
