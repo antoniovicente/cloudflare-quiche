@@ -65,6 +65,73 @@ const MINIMUM_WINDOW_PACKETS: usize = 2;
 
 const LOSS_REDUCTION_FACTOR: f64 = 0.5;
 
+/// When the pacer thinks is a good time to release the next packet
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseTime {
+    Immediate,
+    At(Instant),
+}
+
+/// When the next packet should be release and if it can be part of a burst
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReleaseDecision {
+    time: ReleaseTime,
+    allow_burst: bool,
+}
+
+impl ReleaseTime {
+    /// Add the specific delay to the current time
+    #[allow(dead_code)]
+    fn inc(&mut self, delay: Duration) {
+        match self {
+            ReleaseTime::Immediate => {},
+            ReleaseTime::At(time) => *time += delay,
+        }
+    }
+
+    /// Set the time to the later of two times
+    #[allow(dead_code)]
+    fn set_max(&mut self, other: Instant) {
+        match self {
+            ReleaseTime::Immediate => *self = ReleaseTime::At(other),
+            ReleaseTime::At(time) => *self = ReleaseTime::At(other.max(*time)),
+        }
+    }
+}
+
+impl ReleaseDecision {
+    pub(crate) const EQUAL_THRESHOLD: Duration = Duration::from_micros(35);
+
+    /// Get the [`Instant`] the next packet should be released. It will never be
+    /// in the past.
+    #[inline]
+    pub fn time(&self, now: Instant) -> Option<Instant> {
+        match self.time {
+            ReleaseTime::Immediate => None,
+            ReleaseTime::At(other) => other.gt(&now).then_some(other),
+        }
+    }
+
+    /// Can this packet be appended to a previous burst
+    #[inline]
+    pub fn can_burst(&self) -> bool {
+        self.allow_burst
+    }
+
+    /// Check if the two packets can be released at the same time
+    #[inline]
+    pub fn time_eq(&self, other: &Self, now: Instant) -> bool {
+        let delta = match (self.time(now), other.time(now)) {
+            (None, None) => Duration::ZERO,
+            (Some(t), None) | (None, Some(t)) => t.duration_since(now),
+            (Some(t1), Some(t2)) if t1 < t2 => t2.duration_since(t1),
+            (Some(t1), Some(t2)) => t1.duration_since(t2),
+        };
+
+        delta <= Self::EQUAL_THRESHOLD
+    }
+}
+
 // How many non ACK eliciting packets we send before including a PING to solicit
 // an ACK.
 pub(super) const MAX_OUTSTANDING_NON_ACK_ELICITING: usize = 24;
@@ -911,6 +978,16 @@ impl Recovery {
 
     pub fn update_max_ack_delay(&mut self, max_ack_delay: Duration) {
         self.rtt_stats.max_ack_delay = max_ack_delay;
+    }
+
+    pub fn get_next_release_time(&self) -> ReleaseDecision {
+        let now = Instant::now();
+        let next_send_time = self.congestion.get_packet_send_time();
+        if next_send_time > now {
+            ReleaseDecision{time: ReleaseTime::At(next_send_time), allow_burst: false}
+        } else {
+            ReleaseDecision{time: ReleaseTime::Immediate, allow_burst: false}
+        }
     }
 
     #[cfg(feature = "qlog")]

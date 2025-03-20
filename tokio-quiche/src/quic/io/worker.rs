@@ -304,7 +304,6 @@ where
             &mut send_buf[..trunc]
         };
 
-        #[cfg(feature = "gcongestion")]
         let next_release = {
             let next_release = qconn
                 .get_next_release_time()
@@ -355,14 +354,13 @@ where
             }
 
             #[cfg(not(feature = "gcongestion"))]
-            let max_send_size = tune_max_send_size(
-                segment_size,
-                qconn.send_quantum(),
-                send_buf.len(),
-            );
+            let max_send_size = qconn.send_quantum();
 
             #[cfg(feature = "gcongestion")]
             let max_send_size = usize::MAX;
+
+            let max_send_size =
+                tune_max_send_size(segment_size, max_send_size, send_buf.len());
 
             // If segment_size is known, update the maximum of
             // GSO sender buffer size to the multiple of
@@ -387,7 +385,6 @@ where
                 _ => (),
             }
 
-            #[cfg(feature = "gcongestion")]
             // If the release time of next packet is different, or it can't be
             // part of a burst, start the next batch
             if let Some(next_release) = next_release {
@@ -400,10 +397,6 @@ where
             }
         };
 
-        #[cfg(not(feature = "gcongestion"))]
-        let tx_time = send_info.filter(|_| self.cfg.pacing_offload).map(|v| v.at);
-
-        #[cfg(feature = "gcongestion")]
         let tx_time = next_release
             .filter(|_| self.cfg.pacing_offload)
             .and_then(|v| v.time(now));
@@ -412,21 +405,6 @@ where
         self.write_state.tx_time = tx_time;
         self.write_state.segment_size =
             segment_size.unwrap_or(self.write_state.bytes_written);
-
-        #[cfg(not(feature = "gcongestion"))]
-        if let Some(time) = tx_time {
-            const DEFAULT_MAX_INTO_FUTURE: Duration = Duration::from_millis(1);
-            if time
-                .checked_duration_since(now)
-                .map(|d| d > DEFAULT_MAX_INTO_FUTURE)
-                .unwrap_or(false)
-            {
-                self.write_state.next_release_time =
-                    Some(now + DEFAULT_MAX_INTO_FUTURE.mul_f32(0.8));
-                self.write_state.has_pending_data = false;
-                return Ok(0);
-            }
-        }
 
         buffer_write_outcome
     }

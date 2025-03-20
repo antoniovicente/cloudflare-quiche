@@ -4755,6 +4755,36 @@ impl Connection {
             .unwrap_or(0)
     }
 
+    /// Get the preferred send time for the next packet.
+    #[inline]
+    pub fn get_next_release_time(&self) -> Option<ReleaseDecision> {
+        self.paths
+            .get_active()
+            .map(|path| path.recovery.get_next_release_time())
+            .ok()
+    }
+
+    /// Get the preferred send time for the next packet.
+    #[inline]
+    pub fn get_next_release_time_on_path(
+        &self, local_addr: SocketAddr, peer_addr: SocketAddr,
+    ) -> Option<ReleaseDecision> {
+        self.paths
+            .path_id_from_addrs(&(local_addr, peer_addr))
+            .and_then(|pid| self.paths.get(pid).ok())
+            .map(|path| path.recovery.get_next_release_time())
+    }
+
+    /// The maximum pacing into the future, equals 1/8 of the smoothed rtt, but
+    /// not greater than 5ms
+    pub fn max_release_into_future(&self) -> time::Duration {
+        self.paths
+            .get_active()
+            .map(|p| p.recovery.rtt().mul_f64(0.125))
+            .unwrap_or(time::Duration::from_millis(1))
+            .min(time::Duration::from_millis(5))
+    }
+
     /// Reads contiguous data from a stream into the provided slice.
     ///
     /// The slice must be sized by the caller and will be populated up to its
@@ -17805,6 +17835,7 @@ pub use crate::path::SocketAddrIter;
 pub use crate::recovery::congestion::CongestionControlAlgorithm;
 
 pub use crate::stream::StreamIter;
+pub use crate::recovery::ReleaseDecision;
 
 mod cid;
 mod crypto;
