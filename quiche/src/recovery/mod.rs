@@ -153,6 +153,7 @@ impl RecoveryEpoch {
                 .max(acked.last().unwrap()),
         );
 
+        assert!(newly_acked.is_empty());
         newly_acked.clear();
 
         let mut acked_bytes = 0;
@@ -235,6 +236,7 @@ impl RecoveryEpoch {
         &mut self, loss_delay: Duration, pkt_thresh: u64, now: Instant,
         newly_lost: &mut Vec<Lost>,
     ) -> LossDetectionResult {
+        assert!(newly_lost.is_empty());
         newly_lost.clear();
         let mut lost_bytes = 0;
         self.loss_time = None;
@@ -694,6 +696,8 @@ impl Recovery {
             self.epochs[epoch].least_unacked(),
             &self.rtt_stats,
         );
+        self.newly_acked.clear();
+        self.lost_reuse.clear();
 
         self.pto_count = 0;
         self.lost_count += lost_packets;
@@ -754,6 +758,7 @@ impl Recovery {
                 self.epochs[epoch].least_unacked(),
                 &self.rtt_stats,
             );
+            self.lost_reuse.clear();
 
             self.lost_count += lost_packets;
 
@@ -841,6 +846,8 @@ impl Recovery {
     ) -> (usize, usize) {
         let (lost_bytes, lost_packets) =
             self.detect_and_remove_lost_packets(epoch, now);
+
+        // TODO: self.pacer.on_congestion_event NOT CALLED
 
         (lost_packets, lost_bytes)
     }
