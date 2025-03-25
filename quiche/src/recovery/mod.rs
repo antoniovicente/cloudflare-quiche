@@ -29,6 +29,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::frame;
+use crate::packet;
+use crate::ranges::RangeSet;
 use crate::Config;
 
 #[cfg(feature = "qlog")]
@@ -39,7 +41,7 @@ use smallvec::SmallVec;
 mod congestion;
 mod rtt;
 
-pub use self::congestion::recovery::Recovery;
+use self::congestion::recovery::LegacyRecovery;
 
 // Loss Recovery
 const INITIAL_PACKET_THRESHOLD: u64 = 3;
@@ -115,6 +117,98 @@ impl RecoveryConfig {
             initial_congestion_window_packets: config
                 .initial_congestion_window_packets,
         }
+    }
+}
+
+#[enum_dispatch::enum_dispatch(RecoveryApi)]
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub(crate) enum Recovery {
+    Legacy(LegacyRecovery),
+}
+
+#[enum_dispatch::enum_dispatch]
+/// Api for the Recovery implementation
+pub trait RecoveryApi {
+    fn lost_count(&self) -> usize;
+    fn bytes_lost(&self) -> u64;
+
+    /// Returns whether or not we should elicit an ACK even if we wouldn't
+    /// otherwise have constructed an ACK eliciting packet.
+    fn should_elicit_ack(&self, epoch: packet::Epoch) -> bool;
+
+    fn get_acked_frames(&mut self, epoch: packet::Epoch) -> Vec<frame::Frame>;
+
+    fn get_lost_frames(&mut self, epoch: packet::Epoch) -> Vec<frame::Frame>;
+
+    fn get_largest_acked_on_epoch(&self, epoch: packet::Epoch) -> Option<u64>;
+    fn has_lost_frames(&self, epoch: packet::Epoch) -> bool;
+    fn loss_probes(&self, epoch: packet::Epoch) -> usize;
+    #[cfg(test)]
+    fn inc_loss_probes(&mut self, epoch: packet::Epoch);
+
+    fn ping_sent(&mut self, epoch: packet::Epoch);
+
+    fn on_packet_sent(
+        &mut self, pkt: Sent, epoch: packet::Epoch,
+        handshake_status: HandshakeStatus, now: Instant, trace_id: &str,
+    );
+    fn get_packet_send_time(&self) -> Instant;
+
+    fn on_ack_received(
+        &mut self, ranges: &RangeSet, ack_delay: u64, epoch: packet::Epoch,
+        handshake_status: HandshakeStatus, now: Instant, trace_id: &str,
+    ) -> (usize, usize, usize);
+
+    fn on_loss_detection_timeout(
+        &mut self, handshake_status: HandshakeStatus, now: Instant,
+        trace_id: &str,
+    ) -> (usize, usize);
+    fn on_pkt_num_space_discarded(
+        &mut self, epoch: packet::Epoch, handshake_status: HandshakeStatus,
+        now: Instant,
+    );
+    fn on_path_change(
+        &mut self, epoch: packet::Epoch, now: Instant, _trace_id: &str,
+    ) -> (usize, usize);
+    fn loss_detection_timer(&self) -> Option<Instant>;
+    fn cwnd(&self) -> usize;
+    fn cwnd_available(&self) -> usize;
+    fn rtt(&self) -> Duration;
+
+    fn min_rtt(&self) -> Option<Duration>;
+
+    fn rttvar(&self) -> Duration;
+
+    fn pto(&self) -> Duration;
+
+    fn delivery_rate(&self) -> u64;
+
+    fn max_datagram_size(&self) -> usize;
+
+    fn pmtud_update_max_datagram_size(&mut self, new_max_datagram_size: usize);
+
+    fn update_max_datagram_size(&mut self, new_max_datagram_size: usize);
+
+    fn on_app_limited(&mut self);
+
+    #[cfg(test)]
+    fn app_limited(&self) -> bool;
+
+    fn update_app_limited(&mut self, v: bool);
+
+    fn delivery_rate_update_app_limited(&mut self, v: bool);
+
+    fn update_max_ack_delay(&mut self, max_ack_delay: Duration);
+
+    #[cfg(feature = "qlog")]
+    fn maybe_qlog(&mut self) -> Option<EventData>;
+    fn send_quantum(&self) -> usize;
+}
+
+impl Recovery {
+    pub fn new_with_config(recovery_config: &RecoveryConfig) -> Self {
+        Recovery::from(LegacyRecovery::new_with_config(recovery_config))
     }
 }
 
@@ -370,7 +464,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = Recovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg);
 
         let mut now = Instant::now();
 
@@ -511,7 +605,7 @@ mod tests {
                 now,
                 "",
             ),
-            Ok((0, 0, 2 * 1000))
+            (0, 0, 2 * 1000)
         );
 
         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
@@ -602,7 +696,7 @@ mod tests {
                 now,
                 "",
             ),
-            Ok((2, 2000, 2 * 1000))
+            (2, 2000, 2 * 1000)
         );
 
         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
@@ -623,7 +717,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = Recovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg);
 
         let mut now = Instant::now();
 
@@ -763,7 +857,7 @@ mod tests {
                 now,
                 "",
             ),
-            Ok((0, 0, 3 * 1000))
+            (0, 0, 3 * 1000)
         );
 
         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
@@ -795,7 +889,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = Recovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg);
 
         let mut now = Instant::now();
 
@@ -934,7 +1028,7 @@ mod tests {
                 now,
                 "",
             ),
-            Ok((1, 1000, 1000 * 2))
+            (1, 1000, 1000 * 2)
         );
 
         now += Duration::from_millis(10);
@@ -953,7 +1047,7 @@ mod tests {
                 now,
                 "",
             ),
-            Ok((0, 0, 1000))
+            (0, 0, 1000)
         );
 
         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
@@ -979,7 +1073,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::CUBIC);
 
-        let mut r = Recovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg);
 
         let mut now = Instant::now();
 
@@ -1035,7 +1129,7 @@ mod tests {
                 now,
                 "",
             ),
-            Ok((0, 0, 12000))
+            (0, 0, 12000)
         );
 
         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
@@ -1157,7 +1251,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = Recovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg);
 
         let mut now = Instant::now();
 
@@ -1270,7 +1364,7 @@ mod tests {
                 now,
                 "",
             ),
-            Ok((0, 0, 2 * 1000))
+            (0, 0, 2 * 1000)
         );
 
         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
