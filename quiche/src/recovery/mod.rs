@@ -105,6 +105,7 @@ pub struct RecoveryConfig {
     max_send_udp_payload_size: usize,
     pub max_ack_delay: Duration,
     cc_algorithm: CongestionControlAlgorithm,
+    enable_gcongestion: bool,
     hystart: bool,
     pacing: bool,
     max_pacing_rate: Option<u64>,
@@ -117,6 +118,7 @@ impl RecoveryConfig {
             max_send_udp_payload_size: config.max_send_udp_payload_size,
             max_ack_delay: Duration::ZERO,
             cc_algorithm: config.cc_algorithm,
+            enable_gcongestion: config.enable_gcongestion,
             hystart: config.hystart,
             pacing: config.pacing,
             max_pacing_rate: config.max_pacing_rate,
@@ -217,7 +219,7 @@ pub trait RecoveryApi {
 
 impl Recovery {
     pub fn new_with_config(recovery_config: &RecoveryConfig) -> Self {
-        if false {
+        if recovery_config.enable_gcongestion {
             Recovery::New(NewRecovery::new(recovery_config))
         } else {
             Recovery::Legacy(LegacyRecovery::new_with_config(recovery_config))

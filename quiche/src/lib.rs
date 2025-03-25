@@ -792,6 +792,9 @@ pub struct Config {
     grease: bool,
 
     cc_algorithm: CongestionControlAlgorithm,
+
+    enable_gcongestion: bool,
+
     initial_congestion_window_packets: usize,
 
     pmtud: bool,
@@ -863,6 +866,7 @@ impl Config {
             application_protos: Vec::new(),
             grease: true,
             cc_algorithm: CongestionControlAlgorithm::CUBIC,
+            enable_gcongestion: false,
             initial_congestion_window_packets:
                 DEFAULT_INITIAL_CONGESTION_WINDOW_PACKETS,
             pmtud: false,
@@ -1267,6 +1271,14 @@ impl Config {
     /// The default value is `CongestionControlAlgorithm::CUBIC`.
     pub fn set_cc_algorithm(&mut self, algo: CongestionControlAlgorithm) {
         self.cc_algorithm = algo;
+    }
+
+    /// Configures whether to enable the newer, experimental congestion control
+    /// implementation based on https://github.com/google/quiche
+    ///
+    /// The default value is `false`.
+    pub fn set_enable_gcongestion(&mut self, v: bool) {
+        self.enable_gcongestion = v;
     }
 
     /// Configures whether to enable HyStart++.
