@@ -35,8 +35,8 @@ use std::time::Instant;
 use crate::recovery::new_congestion::bandwidth::Bandwidth;
 use crate::recovery::new_congestion::bbr::BandwidthSampler;
 use crate::recovery::new_congestion::Lost;
-use crate::recovery::rtt::RttStats;
-use crate::recovery::rtt::INITIAL_RTT;
+use crate::recovery::new_congestion::RttStats;
+use crate::recovery::new_congestion::INITIAL_RTT;
 
 use super::Acked;
 use super::BBRv2CongestionEvent;

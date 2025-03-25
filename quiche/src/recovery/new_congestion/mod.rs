@@ -28,10 +28,12 @@ pub mod bandwidth;
 mod bbr;
 mod bbr2;
 pub mod pacer;
+mod recovery;
 
 use std::fmt::Debug;
 use std::time::Instant;
 
+pub use self::recovery::NewRecovery;
 use self::bandwidth::Bandwidth;
 
 use crate::recovery::rtt::RttStats;
