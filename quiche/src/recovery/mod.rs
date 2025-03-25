@@ -215,6 +215,8 @@ pub trait RecoveryApi {
     fn send_quantum(&self) -> usize;
 
     fn get_next_release_time(&self) -> ReleaseDecision;
+
+    fn use_get_next_release_time(&self) -> bool;
 }
 
 impl Recovery {

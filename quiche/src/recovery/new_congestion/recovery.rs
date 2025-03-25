@@ -927,6 +927,10 @@ impl RecoveryApi for NewRecovery {
         self.pacer.get_next_release_time()
     }
 
+    fn use_get_next_release_time(&self) -> bool {
+        true
+    }
+
     #[cfg(feature = "qlog")]
     fn maybe_qlog(&mut self) -> Option<EventData> {
         let qlog_metrics = QlogMetrics {
