@@ -369,11 +369,11 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::BBR);
 
-        let r = LegacyRecovery::new(&cfg);
+        let r = LegacyRecovery::new(&cfg.cc);
 
         assert_eq!(
             r.cwnd(),
-            r.max_datagram_size * cfg.initial_congestion_window_packets
+            r.max_datagram_size * cfg.cc.initial_congestion_window_packets
         );
         assert_eq!(r.bytes_in_flight, 0);
 
@@ -415,7 +415,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::BBR);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
         let now = Instant::now();
         let mss = r.max_datagram_size;
 
@@ -480,7 +480,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::BBR);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
         let now = Instant::now();
         let mss = r.max_datagram_size;
 
@@ -601,7 +601,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::BBR);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
         let now = Instant::now();
         let mss = r.max_datagram_size;
 
@@ -668,7 +668,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::BBR);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
         let now = Instant::now();
         let mss = r.max_datagram_size;
 

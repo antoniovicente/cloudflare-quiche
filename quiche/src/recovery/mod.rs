@@ -31,7 +31,7 @@ use std::time::Instant;
 use crate::frame;
 use crate::packet;
 use crate::ranges::RangeSet;
-use crate::Config;
+use crate::CongestionControlConfig;
 
 #[cfg(feature = "qlog")]
 use qlog::events::EventData;
@@ -113,7 +113,7 @@ pub struct RecoveryConfig {
 }
 
 impl RecoveryConfig {
-    pub fn from_config(config: &Config) -> Self {
+    pub fn from_config(config: &CongestionControlConfig) -> Self {
         Self {
             max_send_udp_payload_size: config.max_send_udp_payload_size,
             max_ack_delay: Duration::ZERO,

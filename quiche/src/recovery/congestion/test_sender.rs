@@ -59,7 +59,7 @@ impl TestSender {
             bytes_in_flight: 0,
             time: Instant::now(),
             rtt_stats: RttStats::new(Duration::from_micros(0)),
-            cc: Congestion::from_config(&RecoveryConfig::from_config(&cfg)),
+            cc: Congestion::from_config(&RecoveryConfig::from_config(&cfg.cc)),
             sent_packets: VecDeque::new(),
         }
     }

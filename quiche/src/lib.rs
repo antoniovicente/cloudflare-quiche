@@ -782,6 +782,23 @@ pub enum QlogLevel {
     Extra = 2,
 }
 
+pub struct CongestionControlConfig {
+    cc_algorithm: CongestionControlAlgorithm,
+
+    enable_gcongestion: bool,
+
+    initial_congestion_window_packets: usize,
+
+    hystart: bool,
+
+    pacing: bool,
+
+    /// Send rate limit in Mbps
+    max_pacing_rate: Option<u64>,
+
+    max_send_udp_payload_size: usize,
+}
+
 /// Stores configuration shared between multiple connections.
 pub struct Config {
     local_transport_params: TransportParams,
@@ -790,30 +807,18 @@ pub struct Config {
 
     tls_ctx: tls::Context,
 
-    application_protos: Vec<Vec<u8>>,
-
-    grease: bool,
-
-    cc_algorithm: CongestionControlAlgorithm,
-
-    enable_gcongestion: bool,
-
-    initial_congestion_window_packets: usize,
+    cc: CongestionControlConfig,
 
     pmtud: bool,
 
-    hystart: bool,
+    application_protos: Vec<Vec<u8>>,
 
-    pacing: bool,
-    /// Send rate limit in Mbps
-    max_pacing_rate: Option<u64>,
+    grease: bool,
 
     dgram_recv_max_queue_len: usize,
     dgram_send_max_queue_len: usize,
 
     path_challenge_recv_max_queue_len: usize,
-
-    max_send_udp_payload_size: usize,
 
     max_connection_window: u64,
     max_stream_window: u64,
@@ -868,23 +873,24 @@ impl Config {
             version,
             tls_ctx,
             application_protos: Vec::new(),
-            grease: true,
-            cc_algorithm: CongestionControlAlgorithm::CUBIC,
-            enable_gcongestion: false,
-            initial_congestion_window_packets:
-                DEFAULT_INITIAL_CONGESTION_WINDOW_PACKETS,
             pmtud: false,
-            hystart: true,
-            pacing: true,
-            max_pacing_rate: None,
+            grease: true,
+            cc: CongestionControlConfig {
+                cc_algorithm: CongestionControlAlgorithm::CUBIC,
+                enable_gcongestion: false,
+                initial_congestion_window_packets:
+                DEFAULT_INITIAL_CONGESTION_WINDOW_PACKETS,
+                hystart: true,
+                pacing: true,
+                max_pacing_rate: None,
+                max_send_udp_payload_size: MAX_SEND_UDP_PAYLOAD_SIZE,
+            },
 
             dgram_recv_max_queue_len: DEFAULT_MAX_DGRAM_QUEUE_LEN,
             dgram_send_max_queue_len: DEFAULT_MAX_DGRAM_QUEUE_LEN,
 
             path_challenge_recv_max_queue_len:
                 DEFAULT_MAX_PATH_CHALLENGE_RX_QUEUE_LEN,
-
-            max_send_udp_payload_size: MAX_SEND_UDP_PAYLOAD_SIZE,
 
             max_connection_window: MAX_CONNECTION_WINDOW,
             max_stream_window: stream::MAX_STREAM_WINDOW,
@@ -1104,7 +1110,7 @@ impl Config {
     ///
     /// The default and minimum value is `1200`.
     pub fn set_max_send_udp_payload_size(&mut self, v: usize) {
-        self.max_send_udp_payload_size = cmp::max(v, MAX_SEND_UDP_PAYLOAD_SIZE);
+        self.cc.max_send_udp_payload_size = cmp::max(v, MAX_SEND_UDP_PAYLOAD_SIZE);
     }
 
     /// Sets the `initial_max_data` transport parameter.
@@ -1258,7 +1264,7 @@ impl Config {
     /// # Ok::<(), quiche::Error>(())
     /// ```
     pub fn set_cc_algorithm_name(&mut self, name: &str) -> Result<()> {
-        self.cc_algorithm = CongestionControlAlgorithm::from_str(name)?;
+        self.cc.cc_algorithm = CongestionControlAlgorithm::from_str(name)?;
 
         Ok(())
     }
@@ -1267,14 +1273,14 @@ impl Config {
     ///
     /// The default value is 10.
     pub fn set_initial_congestion_window_packets(&mut self, packets: usize) {
-        self.initial_congestion_window_packets = packets;
+        self.cc.initial_congestion_window_packets = packets;
     }
 
     /// Sets the congestion control algorithm used.
     ///
     /// The default value is `CongestionControlAlgorithm::CUBIC`.
     pub fn set_cc_algorithm(&mut self, algo: CongestionControlAlgorithm) {
-        self.cc_algorithm = algo;
+        self.cc.cc_algorithm = algo;
     }
 
     /// Configures whether to enable the newer, experimental congestion control
@@ -1282,28 +1288,28 @@ impl Config {
     ///
     /// The default value is `false`.
     pub fn set_enable_gcongestion(&mut self, v: bool) {
-        self.enable_gcongestion = v;
+        self.cc.enable_gcongestion = v;
     }
 
     /// Configures whether to enable HyStart++.
     ///
     /// The default value is `true`.
     pub fn enable_hystart(&mut self, v: bool) {
-        self.hystart = v;
+        self.cc.hystart = v;
     }
 
     /// Configures whether to enable pacing.
     ///
     /// The default value is `true`.
     pub fn enable_pacing(&mut self, v: bool) {
-        self.pacing = v;
+        self.cc.pacing = v;
     }
 
     /// Sets the max value for pacing rate.
     ///
     /// By default pacing rate is not limited.
     pub fn set_max_pacing_rate(&mut self, v: u64) {
-        self.max_pacing_rate = Some(v);
+        self.cc.max_pacing_rate = Some(v);
     }
 
     /// Configures whether to enable receiving DATAGRAM frames.
@@ -1881,7 +1887,7 @@ impl Connection {
             None
         };
 
-        let recovery_config = recovery::RecoveryConfig::from_config(config);
+        let recovery_config = recovery::RecoveryConfig::from_config(&config.cc);
 
         let mut path = path::Path::new(
             local,
@@ -1903,7 +1909,7 @@ impl Connection {
             config.local_transport_params.active_conn_id_limit as usize,
             is_server,
             config.pmtud,
-            config.max_send_udp_payload_size,
+            config.cc.max_send_udp_payload_size,
         );
 
         let active_path_id = paths.get_active_path_id()?;

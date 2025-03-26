@@ -170,7 +170,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let r = LegacyRecovery::new(&cfg);
+        let r = LegacyRecovery::new(&cfg.cc);
 
         assert!(r.cwnd() > 0);
         assert_eq!(r.bytes_in_flight, 0);

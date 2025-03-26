@@ -675,7 +675,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::BBR2);
 
-        let r = LegacyRecovery::new(&cfg);
+        let r = LegacyRecovery::new(&cfg.cc);
 
         // on_init() is called in Connection::new(), so it need to be
         // called manually here.
@@ -694,7 +694,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::BBR2);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
         let now = Instant::now();
         let mss = r.max_datagram_size;
 
@@ -762,7 +762,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::BBR2);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
         let now = Instant::now();
         let mss = r.max_datagram_size;
 
@@ -831,7 +831,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::BBR2);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
         let now = Instant::now();
         let mss = r.max_datagram_size;
 
@@ -951,7 +951,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::BBR2);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
         let now = Instant::now();
         let mss = r.max_datagram_size;
 

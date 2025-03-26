@@ -370,7 +370,7 @@ impl LegacyRecovery {
     }
 
     #[cfg(test)]
-    pub fn new(config: &crate::Config) -> Self {
+    pub fn new(config: &crate::CongestionControlConfig) -> Self {
         Self::new_with_config(&RecoveryConfig::from_config(config))
     }
 
@@ -1002,7 +1002,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
 
         let mut now = Instant::now();
 
@@ -1255,7 +1255,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
 
         let mut now = Instant::now();
 
@@ -1427,7 +1427,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
 
         let mut now = Instant::now();
 
@@ -1611,7 +1611,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::CUBIC);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
 
         let mut now = Instant::now();
 
@@ -1789,7 +1789,7 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = LegacyRecovery::new(&cfg.cc);
 
         let mut now = Instant::now();
 

@@ -962,7 +962,7 @@ mod tests {
         let server_addr = "127.0.0.1:4321".parse().unwrap();
 
         let config = Config::new(crate::PROTOCOL_VERSION).unwrap();
-        let recovery_config = RecoveryConfig::from_config(&config);
+        let recovery_config = RecoveryConfig::from_config(&config.cc);
 
         let path = Path::new(
             client_addr,
@@ -1049,7 +1049,7 @@ mod tests {
         let server_addr = "127.0.0.1:4321".parse().unwrap();
 
         let config = Config::new(crate::PROTOCOL_VERSION).unwrap();
-        let recovery_config = RecoveryConfig::from_config(&config);
+        let recovery_config = RecoveryConfig::from_config(&config.cc);
 
         let path = Path::new(
             client_addr,
@@ -1141,7 +1141,7 @@ mod tests {
 
         // Default to DEFAULT_MAX_PATH_CHALLENGE_RX_QUEUE_LEN
         let config = Config::new(crate::PROTOCOL_VERSION).unwrap();
-        let recovery_config = RecoveryConfig::from_config(&config);
+        let recovery_config = RecoveryConfig::from_config(&config.cc);
 
         let path = Path::new(
             client_addr,
