@@ -183,6 +183,3 @@ pub(super) trait CongestionControl: Debug {
         None
     }
 }
-
-#[cfg(test)]
-mod test_sender;
