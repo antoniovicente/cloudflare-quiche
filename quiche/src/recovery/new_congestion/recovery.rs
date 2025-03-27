@@ -213,6 +213,8 @@ impl RecoveryEpoch {
                                 .get_or_insert(largest_acked - *pkt_num + 1);
                         },
                     }
+                } else {
+                    break;
                 }
             }
         }
@@ -680,8 +682,7 @@ impl RecoveryApi for NewRecovery {
             return (0, 0, 0);
         }
 
-        // TODO(avd)
-        // self.bytes_in_flight -= acked_bytes;
+        self.bytes_in_flight -= acked_bytes;
 
         // Check if largest packet is newly acked.
         let largest_newly_acked = self.newly_acked.last().unwrap();
