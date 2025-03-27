@@ -1,30 +1,30 @@
 [package]
 name = "quiche"
-version = "0.21.0"
+version = "0.23.4"
 authors = ["Alessandro Ghedini <alessandro@ghedini.me>"]
-edition = "2018"
-build = "src/build.rs"
 description = "🥧 Savoury implementation of the QUIC transport protocol and HTTP/3"
-repository = "https://github.com/cloudflare/quiche"
-readme = "README.md"
-keywords = ["quic", "http3"]
-categories = ["network-programming"]
-license = "BSD-2-Clause"
-rust-version = "1.66"
+build = "src/build.rs"
+rust-version = "1.81"
+edition = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+keywords = { workspace = true }
+categories = { workspace = true }
 include = [
-    "/*.md",
-    "/*.toml",
-    "/COPYING",
-    "/deps/boringssl/**/*.[chS]",
-    "/deps/boringssl/**/*.asm",
-    "/deps/boringssl/src/**/*.cc",
-    "/deps/boringssl/**/CMakeLists.txt",
-    "/deps/boringssl/**/sources.cmake",
-    "/deps/boringssl/LICENSE",
-    "/examples",
-    "/include",
-    "/quiche.svg",
-    "/src",
+  "/*.md",
+  "/*.toml",
+  "/COPYING",
+  "/deps/boringssl/**/*.[chS]",
+  "/deps/boringssl/**/*.asm",
+  "/deps/boringssl/src/**/*.cc",
+  "/deps/boringssl/**/CMakeLists.txt",
+  "/deps/boringssl/**/sources.cmake",
+  "/deps/boringssl/LICENSE",
+  "/examples",
+  "/include",
+  "/quiche.svg",
+  "/src",
 ]
 
 [features]
@@ -46,10 +46,13 @@ pkg-config-meta = []
 fuzzing = []
 
 # Build and expose the FFI API.
-ffi = []
+ffi = ["dep:cdylib-link-lines"]
 
 # Exposes internal APIs that have no stability guarantees across versions.
 internal = []
+
+[package.metadata.release]
+tag-prefix = ""
 
 [package.metadata.docs.rs]
 no-default-features = true
@@ -59,6 +62,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [build-dependencies]
 cmake = "0.1"
 pkg-config = { version = "0.3", optional = true }
+cdylib-link-lines = { version = "0.1", optional = true }
 
 [dependencies]
 boring = { workspace = true, optional = true }
@@ -75,14 +79,16 @@ sfv = { version = "0.9", optional = true }
 slab = "0.4"
 smallvec = { workspace = true, features = ["union"] }
 ring = { workspace = true }
-once_cell = "1"
 
 [target."cfg(windows)".dependencies]
-winapi = { version = "0.3", features = ["wincrypt", "ws2def", "ws2ipdef", "ws2tcpip"] }
+windows-sys = { version = "0.59", features = [
+  "Win32_Networking_WinSock",
+  "Win32_Security_Cryptography",
+] }
 
 [dev-dependencies]
-mio = { version = "0.8", features = ["net", "os-poll"] }
-url = "2.5"
+mio = { workspace = true, features = ["net", "os-poll"] }
+url = { workspace = true }
 
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]

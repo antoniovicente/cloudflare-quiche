@@ -1,4 +1,4 @@
-// Copyright (C) 2023, Cloudflare, Inc.
+// Copyright (C) 2024, Cloudflare, Inc.
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -37,9 +37,13 @@ const RTT_WINDOW: Duration = Duration::from_secs(300);
 
 pub struct RttStats {
     pub(super) latest_rtt: Duration,
-    pub(super) min_rtt: Minmax<Duration>,
+
     pub(super) smoothed_rtt: Duration,
+
     pub(super) rttvar: Duration,
+
+    pub(super) min_rtt: Minmax<Duration>,
+
     pub(super) first_rtt_sample: Option<Instant>,
 }
 
@@ -47,7 +51,7 @@ impl Default for RttStats {
     fn default() -> Self {
         RttStats {
             latest_rtt: Duration::ZERO,
-            min_rtt: Minmax::new(INITIAL_RTT),
+            min_rtt: Minmax::new(Duration::MAX),
             smoothed_rtt: INITIAL_RTT,
             rttvar: INITIAL_RTT / 2,
             first_rtt_sample: None,
@@ -71,8 +75,9 @@ impl RttStats {
         &mut self, latest_rtt: Duration, mut ack_delay: Duration, now: Instant,
         handshake_confirmed: bool, max_ack_delay: Duration,
     ) {
+        self.latest_rtt = latest_rtt;
+
         if self.first_rtt_sample.is_none() {
-            self.latest_rtt = latest_rtt;
             self.min_rtt.reset(now, latest_rtt);
             self.smoothed_rtt = latest_rtt;
             self.rttvar = latest_rtt / 2;
@@ -80,12 +85,10 @@ impl RttStats {
             return;
         }
 
-        self.latest_rtt = latest_rtt;
-
         // min_rtt ignores acknowledgment delay.
         self.min_rtt.running_min(RTT_WINDOW, now, latest_rtt);
-        // Limit ack_delay by max_ack_delay after handshake
-        // confirmation.
+
+        // Limit ack_delay by max_ack_delay after handshake confirmation.
         if handshake_confirmed {
             ack_delay = ack_delay.min(max_ack_delay);
         }
@@ -103,7 +106,16 @@ impl RttStats {
                     .abs_diff(adjusted_rtt.as_nanos()) as u64 /
                     4,
             );
+
         self.smoothed_rtt = self.smoothed_rtt * 7 / 8 + adjusted_rtt / 8;
+    }
+
+    pub(crate) fn rtt(&self) -> Duration {
+        self.smoothed_rtt
+    }
+
+    pub(crate) fn min_rtt(&self) -> Option<Duration> {
+        self.min_rtt.ne(&Duration::ZERO).then_some(*self.min_rtt)
     }
 
     pub(crate) fn loss_delay(&self, time_thresh: f64) -> Duration {

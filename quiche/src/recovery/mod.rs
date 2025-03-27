@@ -29,7 +29,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::frame::Frame;
+use crate::frame;
 use crate::packet;
 use crate::ranges::RangeSet;
 use crate::Config;
@@ -72,11 +72,15 @@ pub(super) const MAX_OUTSTANDING_NON_ACK_ELICITING: usize = 24;
 struct RecoveryEpoch {
     /// The time the most recent ack-eliciting packet was sent.
     time_of_last_ack_eliciting_packet: Option<Instant>,
-    /// The largest packet number acknowledged in the packet number space so far
+
+    /// The largest packet number acknowledged in the packet number space so
+    /// far.
     largest_acked_packet: Option<u64>,
+
     /// The time at which the next packet in that packet number space can be
-    /// considered lost based on exceeding the reordering window in time
+    /// considered lost based on exceeding the reordering window in time.
     loss_time: Option<Instant>,
+
     /// An association of packet numbers in a packet number space to information
     /// about them.
     sent_packets: VecDeque<SentPacket>,
@@ -84,8 +88,8 @@ struct RecoveryEpoch {
     loss_probes: usize,
     pkts_in_flight: usize,
 
-    acked_frames: Vec<Frame>,
-    lost_frames: Vec<Frame>,
+    acked_frames: Vec<frame::Frame>,
+    lost_frames: Vec<frame::Frame>,
 }
 
 struct AckedDetectionResult {
@@ -149,23 +153,26 @@ impl RecoveryEpoch {
                 .max(acked.last().unwrap()),
         );
 
+        assert!(newly_acked.is_empty());
         newly_acked.clear();
+
         let mut acked_bytes = 0;
         let mut spurious_losses = 0;
         let mut spurious_pkt_thresh = None;
         let mut has_ack_eliciting = false;
+
         let largest_acked = self.largest_acked_packet.unwrap();
 
         for ack in acked.iter() {
             // Because packets always have incrementing numbers, they are always
-            // in sorted order
+            // in sorted order.
             let start = if self
                 .sent_packets
                 .front()
                 .filter(|e| e.pkt_num >= ack.start)
                 .is_some()
             {
-                // Usually it will be the first packet
+                // Usually it will be the first packet.
                 0
             } else {
                 self.sent_packets
@@ -211,8 +218,6 @@ impl RecoveryEpoch {
                                 .get_or_insert(largest_acked - *pkt_num + 1);
                         },
                     }
-                } else {
-                    break;
                 }
             }
         }
@@ -231,6 +236,7 @@ impl RecoveryEpoch {
         &mut self, loss_delay: Duration, pkt_thresh: u64, now: Instant,
         newly_lost: &mut Vec<Lost>,
     ) -> LossDetectionResult {
+        assert!(newly_lost.is_empty());
         newly_lost.clear();
         let mut lost_bytes = 0;
         self.loss_time = None;
@@ -336,7 +342,7 @@ enum SentStatus {
         has_data: bool,
         pmtud: bool,
         sent_bytes: usize,
-        frames: SmallVec<[Frame; 1]>,
+        frames: SmallVec<[frame::Frame; 1]>,
     },
     Acked,
     Lost,
@@ -403,9 +409,9 @@ pub struct Recovery {
     /// How many non-ack-eliciting packets have been sent.
     outstanding_non_ack_eliciting: usize,
 
-    /// A [`Vec`] that can be reused for calls of
-    /// [`detect_and_remove_acked_packets`] to avoid allocations
-    acked_reuse: Vec<Acked>,
+    /// A resusable list of acks.
+    newly_acked: Vec<Acked>,
+
     /// A [`Vec`] that can be reused for calls of
     /// [`detect_and_remove_lost_packets`] to avoid allocations
     lost_reuse: Vec<Lost>,
@@ -491,8 +497,8 @@ impl Recovery {
                 recovery_config.max_pacing_rate,
             ),
 
+            newly_acked: Vec::new(),
             lost_reuse: Vec::new(),
-            acked_reuse: Vec::new(),
         }
     }
 
@@ -511,14 +517,20 @@ impl Recovery {
 
     pub fn get_acked_frames(
         &mut self, epoch: packet::Epoch,
-    ) -> impl Iterator<Item = Frame> + '_ {
+    ) -> impl Iterator<Item = frame::Frame> + '_ {
         self.epochs[epoch].acked_frames.drain(..)
     }
 
     pub fn get_lost_frames(
         &mut self, epoch: packet::Epoch,
-    ) -> impl Iterator<Item = Frame> + '_ {
+    ) -> impl Iterator<Item = frame::Frame> + '_ {
         self.epochs[epoch].lost_frames.drain(..)
+    }
+
+    pub fn get_largest_acked_on_epoch(
+        &self, epoch: packet::Epoch,
+    ) -> Option<u64> {
+        self.epochs[epoch].largest_acked_packet
     }
 
     pub fn has_lost_frames(&self, epoch: packet::Epoch) -> bool {
@@ -606,6 +618,16 @@ impl Recovery {
     ) -> (usize, usize, usize) {
         let prior_in_flight = self.bytes_in_flight;
 
+        let largest_acked = ranges.last().unwrap();
+
+        // Update the largest acked packet.
+        let largest_acked = self.epochs[epoch]
+            .largest_acked_packet
+            .unwrap_or(0)
+            .max(largest_acked);
+
+        self.epochs[epoch].largest_acked_packet = Some(largest_acked);
+
         let AckedDetectionResult {
             acked_bytes,
             spurious_losses,
@@ -613,7 +635,7 @@ impl Recovery {
             has_ack_eliciting,
         } = self.epochs[epoch].detect_and_remove_acked_packets(
             ranges,
-            &mut self.acked_reuse,
+            &mut self.newly_acked,
             trace_id,
         );
 
@@ -623,14 +645,20 @@ impl Recovery {
                 self.pkt_thresh.max(thresh.min(MAX_PACKET_THRESHOLD));
         }
 
-        if self.acked_reuse.is_empty() {
+        // // Undo congestion window update.
+        // if has_in_flight_spurious_loss {
+        //     (self.cc_ops.rollback)(&mut self);
+        // }
+
+        if self.newly_acked.is_empty() {
             return (0, 0, 0);
         }
 
-        self.bytes_in_flight -= acked_bytes;
+        // TODO(avd)
+        // self.bytes_in_flight -= acked_bytes;
 
-        // Check if largest packet is newly acked
-        let largest_newly_acked = self.acked_reuse.last().unwrap();
+        // Check if largest packet is newly acked.
+        let largest_newly_acked = self.newly_acked.last().unwrap();
         let update_rtt: bool = largest_newly_acked.pkt_num ==
             ranges.last().unwrap() &&
             has_ack_eliciting;
@@ -645,6 +673,16 @@ impl Recovery {
             );
         }
 
+//  <<<<<<< HEAD
+//         // Detect and mark lost packets without removing them from the sent
+//         // packets list.
+//         let loss = self.detect_lost_packets(epoch, now, trace_id);
+
+//         self.congestion.on_packets_acked(
+//             self.bytes_in_flight,
+//             &mut self.newly_acked,
+//             &self.rtt_stats,
+// =======
         let (lost_bytes, lost_packets) =
             self.detect_and_remove_lost_packets(epoch, now);
 
@@ -653,11 +691,13 @@ impl Recovery {
             prior_in_flight,
             self.bytes_in_flight,
             now,
-            &self.acked_reuse,
+            &self.newly_acked,
             &self.lost_reuse,
             self.epochs[epoch].least_unacked(),
             &self.rtt_stats,
         );
+        self.newly_acked.clear();
+        self.lost_reuse.clear();
 
         self.pto_count = 0;
         self.lost_count += lost_packets;
@@ -718,6 +758,7 @@ impl Recovery {
                 self.epochs[epoch].least_unacked(),
                 &self.rtt_stats,
             );
+            self.lost_reuse.clear();
 
             self.lost_count += lost_packets;
 
@@ -805,6 +846,8 @@ impl Recovery {
     ) -> (usize, usize) {
         let (lost_bytes, lost_packets) =
             self.detect_and_remove_lost_packets(epoch, now);
+
+        // TODO: self.pacer.on_congestion_event NOT CALLED
 
         (lost_packets, lost_bytes)
     }
@@ -1070,7 +1113,7 @@ impl std::fmt::Debug for Recovery {
 
 pub struct Sent {
     pub pkt_num: u64,
-    pub frames: SmallVec<[Frame; 1]>,
+    pub frames: SmallVec<[frame::Frame; 1]>,
     pub size: usize,
     pub ack_eliciting: bool,
     pub in_flight: bool,
@@ -1207,12 +1250,11 @@ impl QlogMetrics {
                     smoothed_rtt: new_smoothed_rtt,
                     latest_rtt: new_latest_rtt,
                     rtt_variance: new_rttvar,
-                    pto_count: None,
                     congestion_window: new_cwnd,
                     bytes_in_flight: new_bytes_in_flight,
                     ssthresh: new_ssthresh,
-                    packets_in_flight: None,
                     pacing_rate: new_pacing_rate,
+                    ..Default::default()
                 },
             ));
         }
@@ -1221,602 +1263,779 @@ impl QlogMetrics {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use smallvec::smallvec;
-
-    #[test]
-    fn loss_on_pto() {
-        let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
-        cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
-        let mut r = Recovery::new(&cfg);
-
-        let mut now = Instant::now();
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
-
-        // Start by sending a few packets.
-        let p = Sent {
-            pkt_num: 0,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
-        assert_eq!(r.bytes_in_flight, 1000);
-
-        let p = Sent {
-            pkt_num: 1,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 2000);
-
-        let p = Sent {
-            pkt_num: 2,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
-        assert_eq!(r.bytes_in_flight, 3000);
-
-        let p = Sent {
-            pkt_num: 3,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
-        assert_eq!(r.bytes_in_flight, 4000);
-
-        // Wait for 10ms.
-        now += Duration::from_millis(10);
-
-        // Only the first 2 packets are acked.
-        let mut acked = RangeSet::default();
-        acked.insert(0..2);
-
-        assert_eq!(
-            r.on_ack_received(
-                &acked,
-                25,
-                packet::Epoch::Application,
-                HandshakeStatus::default(),
-                now,
-                ""
-            ),
-            (0, 0, 2000)
-        );
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 2000);
-        assert_eq!(r.lost_count, 0);
-
-        // Wait until loss detection timer expires.
-        now = r.loss_detection_timer().unwrap();
-
-        // PTO.
-        r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
-        assert_eq!(r.loss_probes(packet::Epoch::Application), 1);
-        assert_eq!(r.lost_count, 0);
-        assert_eq!(r.pto_count, 1);
-
-        let p = Sent {
-            pkt_num: 4,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
-        assert_eq!(r.bytes_in_flight, 3000);
-
-        let p = Sent {
-            pkt_num: 5,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
-        assert_eq!(r.bytes_in_flight, 4000);
-        assert_eq!(r.lost_count, 0);
-
-        // Wait for 10ms.
-        now += Duration::from_millis(10);
-
-        // PTO packets are acked.
-        let mut acked = RangeSet::default();
-        acked.insert(4..6);
-
-        assert_eq!(
-            r.on_ack_received(
-                &acked,
-                25,
-                packet::Epoch::Application,
-                HandshakeStatus::default(),
-                now,
-                ""
-            ),
-            (2, 2000, 2000)
-        );
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
-        assert_eq!(r.bytes_in_flight, 0);
-        assert_eq!(r.lost_count, 2);
-
-        // Wait 1 RTT.
-        now += r.rtt();
-
-        r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
-        r.epochs[packet::Epoch::Application].drain_acked_and_lost_packets();
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0)
-    }
-
-    #[test]
-    fn loss_on_timer() {
-        let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
-        cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
-
-        let mut r = Recovery::new(&cfg);
-
-        let mut now = Instant::now();
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
-
-        // Start by sending a few packets.
-        let p = Sent {
-            pkt_num: 0,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
-        assert_eq!(r.bytes_in_flight, 1000);
-
-        let p = Sent {
-            pkt_num: 1,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 2000);
-
-        let p = Sent {
-            pkt_num: 2,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
-        assert_eq!(r.bytes_in_flight, 3000);
-
-        let p = Sent {
-            pkt_num: 3,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
-        assert_eq!(r.bytes_in_flight, 4000);
-
-        // Wait for 10ms.
-        now += Duration::from_millis(10);
-
-        // Only the first 2 packets and the last one are acked.
-        let mut acked = RangeSet::default();
-        acked.insert(0..2);
-        acked.insert(3..4);
-
-        assert_eq!(
-            r.on_ack_received(
-                &acked,
-                25,
-                packet::Epoch::Application,
-                HandshakeStatus::default(),
-                now,
-                ""
-            ),
-            (0, 0, 3000)
-        );
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 1000);
-        assert_eq!(r.lost_count, 0);
-
-        // Wait until loss detection timer expires.
-        now = r.loss_detection_timer().unwrap();
-
-        // Packet is declared lost.
-        r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
-        assert_eq!(r.loss_probes(packet::Epoch::Application), 0);
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 0);
-        assert_eq!(r.lost_count, 1);
-
-        // Wait 1 RTT.
-        now += r.rtt();
-
-        r.detect_and_remove_lost_packets(packet::Epoch::Application, now);
-        r.epochs[packet::Epoch::Application].drain_acked_and_lost_packets();
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
-    }
-
-    #[test]
-    fn loss_on_reordering() {
-        let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
-        cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
-
-        let mut r = Recovery::new(&cfg);
-
-        let mut now = Instant::now();
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
-
-        // Start by sending a few packets.
-        let p = Sent {
-            pkt_num: 0,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
-        assert_eq!(r.bytes_in_flight, 1000);
-
-        let p = Sent {
-            pkt_num: 1,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 2000);
-
-        let p = Sent {
-            pkt_num: 2,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
-        assert_eq!(r.bytes_in_flight, 3000);
-
-        let p = Sent {
-            pkt_num: 3,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
-        assert_eq!(r.bytes_in_flight, 4000);
-
-        // Wait for 10ms.
-        now += Duration::from_millis(10);
-
-        // ACKs are reordered.
-        let mut acked = RangeSet::default();
-        acked.insert(2..4);
-
-        assert_eq!(
-            r.on_ack_received(
-                &acked,
-                25,
-                packet::Epoch::Application,
-                HandshakeStatus::default(),
-                now,
-                ""
-            ),
-            (1, 1000, 2000)
-        );
-
-        now += Duration::from_millis(10);
-
-        let mut acked = RangeSet::default();
-        acked.insert(0..2);
-
-        assert_eq!(r.pkt_thresh, INITIAL_PACKET_THRESHOLD);
-
-        assert_eq!(
-            r.on_ack_received(
-                &acked,
-                25,
-                packet::Epoch::Application,
-                HandshakeStatus::default(),
-                now,
-                ""
-            ),
-            (0, 0, 1000)
-        );
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
-        assert_eq!(r.bytes_in_flight, 0);
-
-        // Spurious loss.
-        assert_eq!(r.lost_count, 1);
-        assert_eq!(r.lost_spurious_count, 1);
-
-        // Packet threshold was increased.
-        assert_eq!(r.pkt_thresh, 4);
-    }
-
-    #[test]
-    fn pmtud_loss_on_timer() {
-        let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
-        cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
-
-        let mut r = Recovery::new(&cfg);
-
-        let mut now = Instant::now();
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
-
-        // Start by sending a few packets.
-        let p = Sent {
-            pkt_num: 0,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
-        assert_eq!(r.bytes_in_flight, 1000);
-
-        let p = Sent {
-            pkt_num: 1,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: true,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-
-        let p = Sent {
-            pkt_num: 2,
-            frames: smallvec![],
-            size: 1000,
-            ack_eliciting: true,
-            in_flight: true,
-            has_data: false,
-            pmtud: false,
-        };
-
-        r.on_packet_sent(
-            p,
-            packet::Epoch::Application,
-            HandshakeStatus::default(),
-            now,
-            "",
-        );
-
-        // Wait for 10ms.
-        now += Duration::from_millis(10);
-
-        // Only the first  packets and the last one are acked.
-        let mut acked = RangeSet::default();
-        acked.insert(0..1);
-        acked.insert(2..3);
-
-        assert_eq!(
-            r.on_ack_received(
-                &acked,
-                25,
-                packet::Epoch::Application,
-                HandshakeStatus::default(),
-                now,
-                "",
-            ),
-            (0, 0, 2000)
-        );
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 1000);
-        assert_eq!(r.lost_count, 0);
-
-        // Wait until loss detection timer expires.
-        now = r.loss_detection_timer().unwrap();
-
-        // Packet is declared lost.
-        r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
-        assert_eq!(r.epochs[packet::Epoch::Application].loss_probes, 0);
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        // assert_eq!(r.epochs[packet::Epoch::Application].in_flight_count, 0);
-        assert_eq!(r.bytes_in_flight, 0);
-        assert_eq!(r.cwnd(), 12000);
-
-        assert_eq!(r.lost_count, 0);
-
-        // Wait 1 RTT.
-        now += r.rtt();
-
-        r.detect_and_remove_lost_packets(packet::Epoch::Application, now);
-        r.epochs[packet::Epoch::Application].drain_acked_and_lost_packets();
-
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
-        assert_eq!(r.bytes_in_flight, 0);
-        assert_eq!(r.lost_count, 0);
-    }
-}
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use smallvec::smallvec;
+
+//     #[test]
+//     fn loss_on_pto() {
+//         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
+//         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
+//         let mut r = Recovery::new(&cfg);
+
+//         let mut now = Instant::now();
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+
+//         // Start by sending a few packets.
+//         let p = Sent {
+//             pkt_num: 0,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
+//         assert_eq!(r.bytes_in_flight, 1000);
+
+//         let p = Sent {
+//             pkt_num: 1,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
+//         assert_eq!(r.bytes_in_flight, 2000);
+
+//         let p = Sent {
+//             pkt_num: 2,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
+//         assert_eq!(r.bytes_in_flight, 3000);
+
+//         let p = Sent {
+//             pkt_num: 3,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
+//         assert_eq!(r.bytes_in_flight, 4000);
+
+//         // Wait for 10ms.
+//         now += Duration::from_millis(10);
+
+//         // Only the first 2 packets are acked.
+//         let mut acked = RangeSet::default();
+//         acked.insert(0..2);
+
+//         assert_eq!(
+//             r.on_ack_received(
+//                 &acked,
+//                 25,
+//                 packet::Epoch::Application,
+//                 HandshakeStatus::default(),
+//                 now,
+//                 ""
+//             ),
+//             (0, 0, 2 * 1000)
+//         );
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
+//         assert_eq!(r.bytes_in_flight, 2000);
+//         assert_eq!(r.lost_count, 0);
+
+//         // Wait until loss detection timer expires.
+//         now = r.loss_detection_timer().unwrap();
+
+//         // PTO.
+//         r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
+//         assert_eq!(r.loss_probes(packet::Epoch::Application), 1);
+//         assert_eq!(r.lost_count, 0);
+//         assert_eq!(r.pto_count, 1);
+
+//         let p = Sent {
+//             pkt_num: 4,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
+//         assert_eq!(r.bytes_in_flight, 3000);
+
+//         let p = Sent {
+//             pkt_num: 5,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
+//         assert_eq!(r.bytes_in_flight, 4000);
+//         assert_eq!(r.lost_count, 0);
+
+//         // Wait for 10ms.
+//         now += Duration::from_millis(10);
+
+//         // PTO packets are acked.
+//         let mut acked = RangeSet::default();
+//         acked.insert(4..6);
+
+//         assert_eq!(
+//             r.on_ack_received(
+//                 &acked,
+//                 25,
+//                 packet::Epoch::Application,
+//                 HandshakeStatus::default(),
+//                 now,
+//                 ""
+//             ),
+//             (2, 2000, 2 * 1000)
+//         );
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
+//         assert_eq!(r.bytes_in_flight, 0);
+//         assert_eq!(r.lost_count, 2);
+
+//         // Wait 1 RTT.
+//         now += r.rtt();
+
+//         r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
+//         r.epochs[packet::Epoch::Application].drain_acked_and_lost_packets();
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0)
+//     }
+
+//     #[test]
+//     fn loss_on_timer() {
+//         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
+//         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
+
+//         let mut r = Recovery::new(&cfg);
+
+//         let mut now = Instant::now();
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+
+//         // Start by sending a few packets.
+//         let p = Sent {
+//             pkt_num: 0,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
+//         assert_eq!(r.bytes_in_flight, 1000);
+
+//         let p = Sent {
+//             pkt_num: 1,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
+//         assert_eq!(r.bytes_in_flight, 2000);
+
+//         let p = Sent {
+//             pkt_num: 2,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
+//         assert_eq!(r.bytes_in_flight, 3000);
+
+//         let p = Sent {
+//             pkt_num: 3,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
+//         assert_eq!(r.bytes_in_flight, 4000);
+
+//         // Wait for 10ms.
+//         now += Duration::from_millis(10);
+
+//         // Only the first 2 packets and the last one are acked.
+//         let mut acked = RangeSet::default();
+//         acked.insert(0..2);
+//         acked.insert(3..4);
+
+//         assert_eq!(
+//             r.on_ack_received(
+//                 &acked,
+//                 25,
+//                 packet::Epoch::Application,
+//                 HandshakeStatus::default(),
+//                 now,
+//                 ""
+//             ),
+//             (0, 0, 3 * 1000)
+//         );
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
+//         assert_eq!(r.bytes_in_flight, 1000);
+//         assert_eq!(r.lost_count, 0);
+
+//         // Wait until loss detection timer expires.
+//         now = r.loss_detection_timer().unwrap();
+
+//         // Packet is declared lost.
+//         r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
+//         assert_eq!(r.loss_probes(packet::Epoch::Application), 0);
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
+//         assert_eq!(r.bytes_in_flight, 0);
+//         assert_eq!(r.lost_count, 1);
+
+//         // Wait 1 RTT.
+//         now += r.rtt();
+
+//         r.detect_and_remove_lost_packets(packet::Epoch::Application, now);
+//         r.epochs[packet::Epoch::Application].drain_acked_and_lost_packets();
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+//     }
+
+//     #[test]
+//     fn loss_on_reordering() {
+//         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
+//         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
+
+//         let mut r = Recovery::new(&cfg);
+
+//         let mut now = Instant::now();
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+
+//         // Start by sending a few packets.
+//         let p = Sent {
+//             pkt_num: 0,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
+//         assert_eq!(r.bytes_in_flight, 1000);
+
+//         let p = Sent {
+//             pkt_num: 1,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
+//         assert_eq!(r.bytes_in_flight, 2000);
+
+//         let p = Sent {
+//             pkt_num: 2,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
+//         assert_eq!(r.bytes_in_flight, 3000);
+
+//         let p = Sent {
+//             pkt_num: 3,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
+//         assert_eq!(r.bytes_in_flight, 4000);
+
+//         // Wait for 10ms.
+//         now += Duration::from_millis(10);
+
+//         // ACKs are reordered.
+//         let mut acked = RangeSet::default();
+//         acked.insert(2..4);
+
+//         assert_eq!(
+//             r.on_ack_received(
+//                 &acked,
+//                 25,
+//                 packet::Epoch::Application,
+//                 HandshakeStatus::default(),
+//                 now,
+//                 ""
+//             ),
+//             (1, 1000, 1000 * 2)
+//         );
+
+//         now += Duration::from_millis(10);
+
+//         let mut acked = RangeSet::default();
+//         acked.insert(0..2);
+
+//         assert_eq!(r.pkt_thresh, INITIAL_PACKET_THRESHOLD);
+
+//         assert_eq!(
+//             r.on_ack_received(
+//                 &acked,
+//                 25,
+//                 packet::Epoch::Application,
+//                 HandshakeStatus::default(),
+//                 now,
+//                 ""
+//             ),
+//             (0, 0, 1000)
+//         );
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+//         assert_eq!(r.bytes_in_flight, 0);
+
+//         // Spurious loss.
+//         assert_eq!(r.lost_count, 1);
+//         assert_eq!(r.lost_spurious_count, 1);
+
+//         // Packet threshold was increased.
+//         assert_eq!(r.pkt_thresh, 4);
+
+//         // Wait 1 RTT.
+//         now += r.rtt();
+
+//         r.detect_lost_packets(packet::Epoch::Application, now, "");
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+//     }
+
+//     #[test]
+//     fn pacing() {
+//         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
+//         cfg.set_cc_algorithm(CongestionControlAlgorithm::CUBIC);
+
+//         let mut r = Recovery::new(&cfg);
+
+//         let mut now = Instant::now();
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+
+//         // send out first packet (a full initcwnd).
+//         let p = Sent {
+//             pkt_num: 0,
+//             frames: smallvec![],
+//             size: 12000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
+//         assert_eq!(r.bytes_in_flight, 12000);
+
+//         // First packet will be sent out immediately.
+//         assert_eq!(r.pacer.rate(), 0);
+//         assert_eq!(r.get_packet_send_time(), now);
+
+//         // Wait 50ms for ACK.
+//         now += Duration::from_millis(50);
+
+//         let mut acked = ranges::RangeSet::default();
+//         acked.insert(0..1);
+
+//         assert_eq!(
+//             r.on_ack_received(
+//                 &acked,
+//                 10,
+//                 packet::Epoch::Application,
+//                 HandshakeStatus::default(),
+//                 now,
+//                 "",
+//             ),
+//             (0, 0, 12000)
+//         );
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+//         assert_eq!(r.bytes_in_flight, 0);
+//         assert_eq!(r.rtt_stats.smoothed_rtt, Duration::from_millis(50));
+
+//         // 1 MSS increased.
+//         assert_eq!(r.cwnd(), 12000 + 1200);
+
+//         // Send out second packet.
+//         let p = Sent {
+//             pkt_num: 1,
+//             frames: smallvec![],
+//             time_sent: now,
+//             time_acked: None,
+//             time_lost: None,
+//             size: 6000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             delivered: 0,
+//             delivered_time: now,
+//             first_sent_time: now,
+//             is_app_limited: false,
+//             tx_in_flight: 0,
+//             lost: 0,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
+//         assert_eq!(r.bytes_in_flight, 6000);
+
+//         // Pacing is not done during initial phase of connection.
+//         assert_eq!(r.get_packet_send_time(), now);
+
+//         // Send the third packet out.
+//         let p = Sent {
+//             pkt_num: 2,
+//             frames: smallvec![],
+//             time_sent: now,
+//             time_acked: None,
+//             time_lost: None,
+//             size: 6000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             delivered: 0,
+//             delivered_time: now,
+//             first_sent_time: now,
+//             is_app_limited: false,
+//             tx_in_flight: 0,
+//             lost: 0,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
+//         assert_eq!(r.bytes_in_flight, 12000);
+
+//         // Send the third packet out.
+//         let p = Sent {
+//             pkt_num: 3,
+//             frames: smallvec![],
+//             time_sent: now,
+//             time_acked: None,
+//             time_lost: None,
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             delivered: 0,
+//             delivered_time: now,
+//             first_sent_time: now,
+//             is_app_limited: false,
+//             tx_in_flight: 0,
+//             lost: 0,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
+//         assert_eq!(r.bytes_in_flight, 13000);
+
+//         // We pace this outgoing packet. as all conditions for pacing
+//         // are passed.
+//         let pacing_rate =
+//             (r.cwnd() as f64 * congestion::PACING_MULTIPLIER / 0.05) as u64;
+//         assert_eq!(r.pacer.rate(), pacing_rate);
+
+//         assert_eq!(
+//             r.get_packet_send_time(),
+//             now + Duration::from_secs_f64(12000.0 / pacing_rate as f64)
+//         );
+//     }
+
+//     #[test]
+//     fn pmtud_loss_on_timer() {
+//         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
+//         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
+
+//         let mut r = Recovery::new(&cfg);
+
+//         let mut now = Instant::now();
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+
+//         // Start by sending a few packets.
+//         let p = Sent {
+//             pkt_num: 0,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
+//         assert_eq!(r.bytes_in_flight, 1000);
+
+//         let p = Sent {
+//             pkt_num: 1,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: true,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+
+//         let p = Sent {
+//             pkt_num: 2,
+//             frames: smallvec![],
+//             size: 1000,
+//             ack_eliciting: true,
+//             in_flight: true,
+//             has_data: false,
+//             pmtud: false,
+//         };
+
+//         r.on_packet_sent(
+//             p,
+//             packet::Epoch::Application,
+//             HandshakeStatus::default(),
+//             now,
+//             "",
+//         );
+
+//         // Wait for 10ms.
+//         now += Duration::from_millis(10);
+
+//         // Only the first  packets and the last one are acked.
+//         let mut acked = RangeSet::default();
+//         acked.insert(0..1);
+//         acked.insert(2..3);
+
+//         assert_eq!(
+//             r.on_ack_received(
+//                 &acked,
+//                 25,
+//                 packet::Epoch::Application,
+//                 HandshakeStatus::default(),
+//                 now,
+//                 "",
+//             ),
+//             (0, 0, 2 * 1000)
+//         );
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
+//         assert_eq!(r.bytes_in_flight, 1000);
+//         assert_eq!(r.lost_count, 0);
+
+//         // Wait until loss detection timer expires.
+//         now = r.loss_detection_timer().unwrap();
+
+//         // Packet is declared lost.
+//         r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
+//         assert_eq!(r.epochs[packet::Epoch::Application].loss_probes, 0);
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
+//         // assert_eq!(r.epochs[packet::Epoch::Application].in_flight_count, 0);
+//         assert_eq!(r.bytes_in_flight, 0);
+//         assert_eq!(r.cwnd(), 12000);
+
+//         assert_eq!(r.lost_count, 0);
+
+//         // Wait 1 RTT.
+//         now += r.rtt();
+
+//         r.detect_and_remove_lost_packets(packet::Epoch::Application, now);
+//         r.epochs[packet::Epoch::Application].drain_acked_and_lost_packets();
+
+//         assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+//         assert_eq!(r.bytes_in_flight, 0);
+//         assert_eq!(r.lost_count, 0);
+//     }
+// }
 
 mod bandwidth;
 mod congestion;

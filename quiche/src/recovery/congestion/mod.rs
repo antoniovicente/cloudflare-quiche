@@ -1,4 +1,4 @@
-// Copyright (C) 2023, Cloudflare, Inc.
+// Copyright (C) 2024, Cloudflare, Inc.
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -183,3 +183,6 @@ pub(super) trait CongestionControl: Debug {
         None
     }
 }
+
+#[cfg(test)]
+mod test_sender;
