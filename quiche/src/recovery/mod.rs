@@ -204,6 +204,32 @@ pub trait RecoveryApi {
     #[cfg(test)]
     fn app_limited(&self) -> bool;
 
+    #[cfg(test)]
+    fn sent_packets_len(&self, epoch: packet::Epoch) -> usize;
+
+    #[cfg(test)]
+    fn bytes_in_flight(&self) -> usize;
+
+    #[cfg(test)]
+    fn in_flight_count(&self, epoch: packet::Epoch) -> usize;
+
+    #[cfg(test)]
+    fn pacing_rate(&self) -> u64;
+
+    #[cfg(test)]
+    fn pto_count(&self) -> u32;
+
+    #[cfg(test)]
+    fn pkt_thresh(&self) -> u64;
+
+    #[cfg(test)]
+    fn lost_spurious_count(&self) -> usize;
+
+    #[cfg(test)]
+    fn detect_lost_packets_for_test(
+        &mut self, epoch: packet::Epoch, now: Instant,
+    ) -> (usize, usize);
+
     fn update_app_limited(&mut self, v: bool);
 
     fn delivery_rate_update_app_limited(&mut self, v: bool);

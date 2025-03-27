@@ -909,6 +909,51 @@ impl RecoveryApi for NewRecovery {
     }
 
     #[cfg(test)]
+    fn sent_packets_len(&self, epoch: packet::Epoch) -> usize {
+        self.epochs[epoch].sent_packets.len()
+    }
+
+    #[cfg(test)]
+    fn in_flight_count(&self, epoch: packet::Epoch) -> usize {
+        self.epochs[epoch].pkts_in_flight
+    }
+
+    #[cfg(test)]
+    fn bytes_in_flight(&self) -> usize {
+        self.bytes_in_flight
+    }
+
+    #[cfg(test)]
+    fn pacing_rate(&self) -> u64 {
+        self
+            .pacer
+            .pacing_rate(self.bytes_in_flight, &self.rtt_stats)
+            .to_bytes_per_period(Duration::from_secs(1))
+    }
+
+    #[cfg(test)]
+    fn pto_count(&self) -> u32 {
+        self.pto_count
+    }
+
+    #[cfg(test)]
+    fn pkt_thresh(&self) -> u64 {
+        self.pkt_thresh
+    }
+
+    #[cfg(test)]
+    fn lost_spurious_count(&self) -> usize {
+        self.lost_spurious_count
+    }
+
+    #[cfg(test)]
+    fn detect_lost_packets_for_test(
+        &mut self, epoch: packet::Epoch, now: Instant,
+    ) -> (usize, usize) {
+        self.detect_and_remove_lost_packets(epoch, now)
+    }
+
+    #[cfg(test)]
     fn app_limited(&self) -> bool {
         self.pacer.is_app_limited(self.bytes_in_flight)
     }
@@ -919,7 +964,7 @@ impl RecoveryApi for NewRecovery {
 
     fn delivery_rate_update_app_limited(&mut self, _v: bool) {
         // TODO
-    }    
+    }
 
     fn update_max_ack_delay(&mut self, max_ack_delay: Duration) {
         self.rtt_stats.max_ack_delay = max_ack_delay;
@@ -976,4 +1021,3 @@ impl std::fmt::Debug for NewRecovery {
         Ok(())
     }
 }
-
