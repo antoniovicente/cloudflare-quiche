@@ -645,16 +645,6 @@ impl RecoveryApi for NewRecovery {
     ) -> (usize, usize, usize) {
         let prior_in_flight = self.bytes_in_flight;
 
-        let largest_acked = ranges.last().unwrap();
-
-        // Update the largest acked packet.
-        let largest_acked = self.epochs[epoch]
-            .largest_acked_packet
-            .unwrap_or(0)
-            .max(largest_acked);
-
-        self.epochs[epoch].largest_acked_packet = Some(largest_acked);
-
         let AckedDetectionResult {
             acked_bytes,
             spurious_losses,
@@ -671,11 +661,6 @@ impl RecoveryApi for NewRecovery {
             self.pkt_thresh =
                 self.pkt_thresh.max(thresh.min(MAX_PACKET_THRESHOLD));
         }
-
-        // // Undo congestion window update.
-        // if has_in_flight_spurious_loss {
-        //     (self.cc_ops.rollback)(&mut self);
-        // }
 
         if self.newly_acked.is_empty() {
             return (0, 0, 0);
