@@ -30,6 +30,8 @@ use std::ops::IndexMut;
 use std::ops::RangeInclusive;
 use std::time;
 
+use ring::aead;
+
 use crate::Error;
 use crate::Result;
 
@@ -50,8 +52,6 @@ pub const MAX_CID_LEN: u8 = 20;
 pub const MAX_PKT_NUM_LEN: usize = 4;
 
 const SAMPLE_LEN: usize = 16;
-
-const RETRY_AEAD_ALG: crypto::Algorithm = crypto::Algorithm::AES128_GCM;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Epoch {
@@ -201,23 +201,23 @@ impl<'a> ConnectionId<'a> {
     }
 }
 
-impl Default for ConnectionId<'_> {
+impl<'a> Default for ConnectionId<'a> {
     #[inline]
     fn default() -> Self {
         Self::from_vec(Vec::new())
     }
 }
 
-impl From<Vec<u8>> for ConnectionId<'_> {
+impl<'a> From<Vec<u8>> for ConnectionId<'a> {
     #[inline]
     fn from(v: Vec<u8>) -> Self {
         Self::from_vec(v)
     }
 }
 
-impl From<ConnectionId<'_>> for Vec<u8> {
+impl<'a> From<ConnectionId<'a>> for Vec<u8> {
     #[inline]
-    fn from(id: ConnectionId<'_>) -> Self {
+    fn from(id: ConnectionId<'a>) -> Self {
         match id.0 {
             ConnectionIdInner::Vec(cid) => cid,
             ConnectionIdInner::Ref(cid) => cid.to_vec(),
@@ -225,16 +225,16 @@ impl From<ConnectionId<'_>> for Vec<u8> {
     }
 }
 
-impl PartialEq for ConnectionId<'_> {
+impl<'a> PartialEq for ConnectionId<'a> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.as_ref() == other.as_ref()
     }
 }
 
-impl Eq for ConnectionId<'_> {}
+impl<'a> Eq for ConnectionId<'a> {}
 
-impl AsRef<[u8]> for ConnectionId<'_> {
+impl<'a> AsRef<[u8]> for ConnectionId<'a> {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         match &self.0 {
@@ -244,14 +244,14 @@ impl AsRef<[u8]> for ConnectionId<'_> {
     }
 }
 
-impl std::hash::Hash for ConnectionId<'_> {
+impl<'a> std::hash::Hash for ConnectionId<'a> {
     #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.as_ref().hash(state);
     }
 }
 
-impl std::ops::Deref for ConnectionId<'_> {
+impl<'a> std::ops::Deref for ConnectionId<'a> {
     type Target = [u8];
 
     #[inline]
@@ -263,14 +263,14 @@ impl std::ops::Deref for ConnectionId<'_> {
     }
 }
 
-impl Clone for ConnectionId<'_> {
+impl<'a> Clone for ConnectionId<'a> {
     #[inline]
     fn clone(&self) -> Self {
         Self::from_vec(self.as_ref().to_vec())
     }
 }
 
-impl std::fmt::Debug for ConnectionId<'_> {
+impl<'a> std::fmt::Debug for ConnectionId<'a> {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         for c in self.as_ref() {
@@ -403,14 +403,12 @@ impl<'a> Header<'a> {
             },
 
             Type::Retry => {
-                const TAG_LEN: usize = RETRY_AEAD_ALG.tag_len();
-
                 // Exclude the integrity tag from the token.
-                if b.cap() < TAG_LEN {
+                if b.cap() < aead::AES_128_GCM.tag_len() {
                     return Err(Error::InvalidPacket);
                 }
 
-                let token_len = b.cap() - TAG_LEN;
+                let token_len = b.cap() - aead::AES_128_GCM.tag_len();
                 token = Some(b.get_bytes(token_len)?.to_vec());
             },
 
@@ -524,7 +522,7 @@ impl<'a> Header<'a> {
     }
 }
 
-impl std::fmt::Debug for Header<'_> {
+impl<'a> std::fmt::Debug for Header<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:?}", self.ty)?;
 
@@ -557,12 +555,20 @@ impl std::fmt::Debug for Header<'_> {
     }
 }
 
-pub fn pkt_num_len(pn: u64, largest_acked: u64) -> usize {
-    let num_unacked: u64 = pn.saturating_sub(largest_acked) + 1;
-    // computes ceil of num_unacked.log2()
-    let min_bits = u64::BITS - num_unacked.leading_zeros();
-    // get the num len in bytes
-    ((min_bits + 7) / 8) as usize
+pub fn pkt_num_len(pn: u64) -> Result<usize> {
+    let len = if pn < u64::from(u8::MAX) {
+        1
+    } else if pn < u64::from(u16::MAX) {
+        2
+    } else if pn < 16_777_215u64 {
+        3
+    } else if pn < u64::from(u32::MAX) {
+        4
+    } else {
+        return Err(Error::InvalidPacket);
+    };
+
+    Ok(len)
 }
 
 pub fn decrypt_hdr(
@@ -707,10 +713,10 @@ pub fn encrypt_pkt(
     Ok(payload_offset + ciphertext_len)
 }
 
-pub fn encode_pkt_num(
-    pn: u64, pn_len: usize, b: &mut octets::OctetsMut,
-) -> Result<()> {
-    match pn_len {
+pub fn encode_pkt_num(pn: u64, b: &mut octets::OctetsMut) -> Result<()> {
+    let len = pkt_num_len(pn)?;
+
+    match len {
         1 => b.put_u8(pn as u8)?,
 
         2 => b.put_u16(pn as u16)?,
@@ -778,25 +784,26 @@ pub fn retry(
 pub fn verify_retry_integrity(
     b: &octets::OctetsMut, odcid: &[u8], version: u32,
 ) -> Result<()> {
-    const TAG_LEN: usize = RETRY_AEAD_ALG.tag_len();
-
     let tag = compute_retry_integrity_tag(b, odcid, version)?;
 
-    crypto::verify_slices_are_equal(&b.as_ref()[..TAG_LEN], tag.as_ref())
+    ring::constant_time::verify_slices_are_equal(
+        &b.as_ref()[..aead::AES_128_GCM.tag_len()],
+        tag.as_ref(),
+    )
+    .map_err(|_| Error::CryptoFail)?;
+
+    Ok(())
 }
 
 fn compute_retry_integrity_tag(
     b: &octets::OctetsMut, odcid: &[u8], version: u32,
-) -> Result<Vec<u8>> {
-    const KEY_LEN: usize = RETRY_AEAD_ALG.key_len();
-    const TAG_LEN: usize = RETRY_AEAD_ALG.tag_len();
-
-    const RETRY_INTEGRITY_KEY_V1: [u8; KEY_LEN] = [
+) -> Result<aead::Tag> {
+    const RETRY_INTEGRITY_KEY_V1: [u8; 16] = [
         0xbe, 0x0c, 0x69, 0x0b, 0x9f, 0x66, 0x57, 0x5a, 0x1d, 0x76, 0x6b, 0x54,
         0xe3, 0x68, 0xc8, 0x4e,
     ];
 
-    const RETRY_INTEGRITY_NONCE_V1: [u8; crypto::MAX_NONCE_LEN] = [
+    const RETRY_INTEGRITY_NONCE_V1: [u8; aead::NONCE_LEN] = [
         0x46, 0x15, 0x99, 0xd3, 0x5d, 0x63, 0x2b, 0xf2, 0x23, 0x98, 0x25, 0xbb,
     ];
 
@@ -817,23 +824,17 @@ fn compute_retry_integrity_tag(
     pb.put_bytes(odcid)?;
     pb.put_bytes(&b.buf()[..hdr_len])?;
 
-    let key = crypto::PacketKey::new(
-        RETRY_AEAD_ALG,
-        key.to_vec(),
-        nonce.to_vec(),
-        crypto::Seal::ENCRYPT,
-    )?;
+    let key = aead::LessSafeKey::new(
+        aead::UnboundKey::new(&aead::AES_128_GCM, key)
+            .map_err(|_| Error::CryptoFail)?,
+    );
 
-    let mut out_tag = vec![0_u8; TAG_LEN];
+    let nonce = aead::Nonce::assume_unique_for_key(nonce);
 
-    let out_len = key.seal_with_u64_counter(0, &pseudo, &mut out_tag, 0, None)?;
+    let aad = aead::Aad::from(&pseudo);
 
-    // Ensure that the output only contains the AEAD tag.
-    if out_len != out_tag.len() {
-        return Err(Error::CryptoFail);
-    }
-
-    Ok(out_tag)
+    key.seal_in_place_separate_tag(nonce, aad, &mut [])
+        .map_err(|_| Error::CryptoFail)
 }
 
 pub struct KeyUpdate {
@@ -1168,31 +1169,9 @@ mod tests {
     }
 
     #[test]
-    fn pkt_num_encode_decode() {
-        let num_len = pkt_num_len(0, 0);
-        assert_eq!(num_len, 1);
+    fn pkt_num_decode() {
         let pn = decode_pkt_num(0xa82f30ea, 0x9b32, 2);
         assert_eq!(pn, 0xa82f9b32);
-        let mut d = [0; 10];
-        let mut b = octets::OctetsMut::with_slice(&mut d);
-        let num_len = pkt_num_len(0xac5c02, 0xabe8b3);
-        assert_eq!(num_len, 2);
-        encode_pkt_num(0xac5c02, num_len, &mut b).unwrap();
-        // reading
-        let mut b = octets::OctetsMut::with_slice(&mut d);
-        let hdr_num = u64::from(b.get_u16().unwrap());
-        let pn = decode_pkt_num(0xac5c01, hdr_num, num_len);
-        assert_eq!(pn, 0xac5c02);
-        // sending 0xace8fe while having 0xabe8b3 acked
-        let num_len = pkt_num_len(0xace9fe, 0xabe8b3);
-        assert_eq!(num_len, 3);
-        let mut b = octets::OctetsMut::with_slice(&mut d);
-        encode_pkt_num(0xace9fe, num_len, &mut b).unwrap();
-        // reading
-        let mut b = octets::OctetsMut::with_slice(&mut d);
-        let hdr_num = u64::from(b.get_u24().unwrap());
-        let pn = decode_pkt_num(0xace9fa, hdr_num, num_len);
-        assert_eq!(pn, 0xace9fe);
     }
 
     #[test]
@@ -1312,13 +1291,9 @@ mod tests {
 
         let payload_len = b.get_varint().unwrap() as usize;
 
-        let (aead, _) = crypto::derive_initial_key_material(
-            dcid,
-            hdr.version,
-            is_server,
-            false,
-        )
-        .unwrap();
+        let (aead, _) =
+            crypto::derive_initial_key_material(dcid, hdr.version, is_server)
+                .unwrap();
 
         decrypt_hdr(&mut b, &mut hdr, &aead).unwrap();
         assert_eq!(hdr.pkt_num_len, expected_pn_len);
@@ -1531,7 +1506,7 @@ mod tests {
 
         let alg = crypto::Algorithm::ChaCha20_Poly1305;
 
-        let aead = crypto::Open::from_secret(alg, &secret).unwrap();
+        let aead = crypto::Open::from_secret(alg, secret.into()).unwrap();
 
         let mut hdr = Header::from_bytes(&mut b, 0).unwrap();
         assert_eq!(hdr.ty, Type::Short);
@@ -1565,13 +1540,9 @@ mod tests {
 
         b.put_bytes(header).unwrap();
 
-        let (_, aead) = crypto::derive_initial_key_material(
-            dcid,
-            hdr.version,
-            is_server,
-            false,
-        )
-        .unwrap();
+        let (_, aead) =
+            crypto::derive_initial_key_material(dcid, hdr.version, is_server)
+                .unwrap();
 
         let payload_len = frames.len();
 
@@ -1903,7 +1874,7 @@ mod tests {
 
         let alg = crypto::Algorithm::ChaCha20_Poly1305;
 
-        let aead = crypto::Seal::from_secret(alg, &secret).unwrap();
+        let aead = crypto::Seal::from_secret(alg, secret.into()).unwrap();
 
         let pn = 654_360_564;
         let pn_len = 3;
@@ -1955,8 +1926,7 @@ mod tests {
         let payload_len = b.get_varint().unwrap() as usize;
 
         let (aead, _) =
-            crypto::derive_initial_key_material(b"", hdr.version, true, false)
-                .unwrap();
+            crypto::derive_initial_key_material(b"", hdr.version, true).unwrap();
 
         assert_eq!(
             decrypt_pkt(&mut b, 0, 1, payload_len, &aead),
@@ -1989,8 +1959,7 @@ mod tests {
         let payload_len = 1;
 
         let (aead, _) =
-            crypto::derive_initial_key_material(b"", hdr.version, true, false)
-                .unwrap();
+            crypto::derive_initial_key_material(b"", hdr.version, true).unwrap();
 
         assert_eq!(
             decrypt_pkt(&mut b, 0, 1, payload_len, &aead),

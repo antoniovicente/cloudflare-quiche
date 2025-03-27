@@ -382,7 +382,6 @@
 #[macro_use]
 extern crate log;
 
-use octets::BufferTooShortError;
 #[cfg(feature = "qlog")]
 use qlog::events::connectivity::ConnectivityEventType;
 #[cfg(feature = "qlog")]
@@ -412,7 +411,6 @@ use std::time;
 use std::sync::Arc;
 
 use std::net::SocketAddr;
-
 use std::str::FromStr;
 
 use std::collections::HashSet;
@@ -581,7 +579,6 @@ pub enum Error {
 /// QUIC error codes sent on the wire.
 ///
 /// As defined in [RFC9000](https://www.rfc-editor.org/rfc/rfc9000.html#name-error-codes).
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum WireErrorCode {
     /// An endpoint uses this with CONNECTION_CLOSE to signal that the
     /// connection is being closed abruptly in the absence of any error.
@@ -811,11 +808,7 @@ pub struct Config {
     max_connection_window: u64,
     max_stream_window: u64,
 
-    max_amplification_factor: usize,
-
     disable_dcid_reuse: bool,
-
-    track_unknown_transport_params: Option<usize>,
 }
 
 // See https://quicwg.org/base-drafts/rfc9000.html#section-15
@@ -881,11 +874,7 @@ impl Config {
             max_connection_window: MAX_CONNECTION_WINDOW,
             max_stream_window: stream::MAX_STREAM_WINDOW,
 
-            max_amplification_factor: MAX_AMPLIFICATION_FACTOR,
-
             disable_dcid_reuse: false,
-
-            track_unknown_transport_params: None,
         })
     }
 
@@ -1069,13 +1058,6 @@ impl Config {
         }
 
         self.set_application_protos(&protos_list)
-    }
-
-    /// Sets the anti-amplification limit factor.
-    ///
-    /// The default value is `3`.
-    pub fn set_max_amplification_factor(&mut self, v: usize) {
-        self.max_amplification_factor = v;
     }
 
     /// Sets the `max_idle_timeout` transport parameter, in milliseconds.
@@ -1355,18 +1337,6 @@ impl Config {
     pub fn set_disable_dcid_reuse(&mut self, v: bool) {
         self.disable_dcid_reuse = v;
     }
-
-    /// Enables tracking unknown transport parameters.
-    ///
-    /// Specify the maximum number of bytes used to track unknown transport
-    /// parameters. The size includes the identifier and its value. If storing a
-    /// transport parameter would cause the limit to be exceeded, it is quietly
-    /// dropped.
-    ///
-    /// The default is that the feature is disabled.
-    pub fn enable_track_unknown_transport_parameters(&mut self, size: usize) {
-        self.track_unknown_transport_params = Some(size);
-    }
 }
 
 /// A QUIC connection.
@@ -1383,15 +1353,11 @@ pub struct Connection {
     /// Packet number spaces.
     pkt_num_spaces: [packet::PktNumSpace; packet::Epoch::count()],
 
-    /// Next packet number.
+    /// Next packet number
     next_pkt_num: u64,
 
     /// Peer's transport parameters.
     peer_transport_params: TransportParams,
-
-    /// If tracking unknown transport parameters from a peer, how much space to
-    /// use in bytes.
-    peer_transport_params_track_unknown: Option<usize>,
 
     /// Local transport parameters.
     local_transport_params: TransportParams,
@@ -1432,12 +1398,6 @@ pub struct Connection {
     /// Total number of packets sent with data retransmitted.
     retrans_count: usize,
 
-    /// Total number of sent DATAGRAM frames.
-    dgram_sent_count: usize,
-
-    /// Total number of received DATAGRAM frames.
-    dgram_recv_count: usize,
-
     /// Total number of bytes received from the peer.
     rx_data: u64,
 
@@ -1471,9 +1431,6 @@ pub struct Connection {
 
     /// Total number of bytes received over the connection.
     recv_bytes: u64,
-
-    /// Total number of bytes sent acked over the connection.
-    acked_bytes: u64,
 
     /// Total number of bytes sent lost over the connection.
     lost_bytes: u64,
@@ -1559,7 +1516,7 @@ pub struct Connection {
     /// Whether the connection is closed.
     closed: bool,
 
-    /// Whether the connection was timed out.
+    // Whether the connection was timed out
     timed_out: bool,
 
     /// Whether to send GREASE.
@@ -1593,9 +1550,6 @@ pub struct Connection {
 
     /// The number of streams stopped by remote.
     stopped_stream_remote_count: u64,
-
-    /// The anti-amplification limit factor.
-    max_amplification_factor: usize,
 }
 
 /// Creates a new server-side connection.
@@ -1916,9 +1870,6 @@ impl Connection {
 
             peer_transport_params: TransportParams::default(),
 
-            peer_transport_params_track_unknown: config
-                .track_unknown_transport_params,
-
             local_transport_params: config.local_transport_params.clone(),
 
             handshake: tls,
@@ -1938,11 +1889,8 @@ impl Connection {
             sent_count: 0,
             lost_count: 0,
             retrans_count: 0,
-            dgram_sent_count: 0,
-            dgram_recv_count: 0,
             sent_bytes: 0,
             recv_bytes: 0,
-            acked_bytes: 0,
             lost_bytes: 0,
 
             rx_data: 0,
@@ -2042,8 +1990,6 @@ impl Connection {
             stopped_stream_local_count: 0,
             reset_stream_remote_count: 0,
             stopped_stream_remote_count: 0,
-
-            max_amplification_factor: config.max_amplification_factor,
         };
 
         if let Some(odcid) = odcid {
@@ -2076,7 +2022,6 @@ impl Connection {
                 &dcid,
                 conn.version,
                 conn.is_server,
-                false,
             )?;
 
             let reset_token = conn.peer_transport_params.stateless_reset_token;
@@ -2223,28 +2168,12 @@ impl Connection {
         let raw_params_len = b.get_u64()? as usize;
         let raw_params_bytes = b.get_bytes(raw_params_len)?;
 
-        let peer_params = TransportParams::decode(
-            raw_params_bytes.as_ref(),
-            self.is_server,
-            self.peer_transport_params_track_unknown,
-        )?;
+        let peer_params =
+            TransportParams::decode(raw_params_bytes.as_ref(), self.is_server)?;
 
         self.process_peer_transport_params(peer_params)?;
 
         Ok(())
-    }
-
-    /// Sets the `max_idle_timeout` transport parameter, in milliseconds.
-    ///
-    /// This must only be called immediately after creating a connection, that
-    /// is, before any packet is sent or received.
-    ///
-    /// The default value is infinite, that is, no timeout is used unless
-    /// already configured when creating the connection.
-    pub fn set_max_idle_timeout(&mut self, v: u64) -> Result<()> {
-        self.local_transport_params.max_idle_timeout = v;
-
-        self.encode_transport_params()
     }
 
     /// Processes QUIC packets received from the peer.
@@ -2313,7 +2242,7 @@ impl Connection {
             // Note that we also need to limit the number of bytes we sent on a
             // path if we are not the host that initiated its usage.
             if self.is_server && !recv_path.verified_peer_address {
-                recv_path.max_send_bytes += len * self.max_amplification_factor;
+                recv_path.max_send_bytes += len * MAX_AMPLIFICATION_FACTOR;
             }
         } else if !self.is_server {
             // If a client receives packets from an unknown server address,
@@ -2403,8 +2332,7 @@ impl Connection {
         match self.peer_transport_params.stateless_reset_token {
             Some(token) => {
                 let token_len = 16;
-
-                crypto::verify_slices_are_equal(
+                ring::constant_time::verify_slices_are_equal(
                     &token.to_be_bytes(),
                     &buf[buf_len - token_len..buf_len],
                 )
@@ -2532,7 +2460,6 @@ impl Connection {
                 &self.destination_id(),
                 self.version,
                 self.is_server,
-                true,
             )?;
 
             // Reset connection state to force sending another Initial packet.
@@ -2598,7 +2525,6 @@ impl Connection {
                 &hdr.scid,
                 self.version,
                 self.is_server,
-                true,
             )?;
 
             // Reset connection state to force sending another Initial packet.
@@ -2668,7 +2594,6 @@ impl Connection {
                 &hdr.dcid,
                 self.version,
                 self.is_server,
-                false,
             )?;
 
             self.pkt_num_spaces[packet::Epoch::Initial].crypto_open =
@@ -2859,8 +2784,10 @@ impl Connection {
                     EventData::KeyUpdated(qlog::events::security::KeyUpdated {
                         key_type:
                             qlog::events::security::KeyType::Client1RttSecret,
+                        old: None,
+                        new: String::new(),
+                        generation: None,
                         trigger: trigger.clone(),
-                        ..Default::default()
                     });
 
                 q.add_event_data_with_instant(ev_data_client, now).ok();
@@ -2869,8 +2796,10 @@ impl Connection {
                     EventData::KeyUpdated(qlog::events::security::KeyUpdated {
                         key_type:
                             qlog::events::security::KeyType::Server1RttSecret,
+                        old: None,
+                        new: String::new(),
+                        generation: None,
                         trigger,
-                        ..Default::default()
                     });
 
                 q.add_event_data_with_instant(ev_data_server, now).ok();
@@ -2964,8 +2893,13 @@ impl Connection {
                 EventData::PacketReceived(qlog::events::quic::PacketReceived {
                     header: qlog_pkt_hdr,
                     frames: Some(qlog_frames),
+                    is_coalesced: None,
+                    retry_token: None,
+                    stateless_reset_token: None,
+                    supported_versions: None,
                     raw: Some(qlog_raw_info),
-                    ..Default::default()
+                    datagram_id: None,
+                    trigger: None,
                 });
 
             q.add_event_data_with_instant(ev_data, now).ok();
@@ -3068,7 +3002,7 @@ impl Connection {
                                     length: Some(length as u64),
                                     from: Some(DataRecipient::Transport),
                                     to: Some(DataRecipient::Dropped),
-                                    ..Default::default()
+                                    raw: None,
                                 },
                             );
 
@@ -3648,7 +3582,6 @@ impl Connection {
             }
         }
 
-        let is_app_limited = self.delivery_rate_check_if_app_limited();
         let n_paths = self.paths.len();
         let path = self.paths.get_mut(send_pid)?;
         let flow_control = &mut self.flow_control;
@@ -3662,9 +3595,7 @@ impl Connection {
         };
 
         let pn = self.next_pkt_num;
-        let largest_acked_pkt =
-            path.recovery.get_largest_acked_on_epoch(epoch).unwrap_or(0);
-        let pn_len = packet::pkt_num_len(pn, largest_acked_pkt);
+        let pn_len = packet::pkt_num_len(pn)?;
 
         // The AEAD overhead at the current encryption level.
         let crypto_overhead = pkt_space.crypto_overhead().ok_or(Error::Done)?;
@@ -3746,16 +3677,13 @@ impl Connection {
                 // in the output buffer.
                 //
                 // This usually happens when we try to send a new packet but
-                // failed because cwnd is almost full. In such case app_limited
-                // is set to false here to make cwnd grow when ACK is received.
-                path.recovery.update_app_limited(false);
+                // failed because cwnd is almost full.
                 return Err(Error::Done);
             },
         }
 
         // Make sure there is enough space for the minimum payload length.
         if left < PAYLOAD_MIN_LEN {
-            path.recovery.update_app_limited(false);
             return Err(Error::Done);
         }
 
@@ -3781,7 +3709,7 @@ impl Connection {
             b.skip(PAYLOAD_LENGTH_LEN)?;
         }
 
-        packet::encode_pkt_num(pn, pn_len, &mut b)?;
+        packet::encode_pkt_num(pn, &mut b)?;
 
         let payload_offset = b.off();
 
@@ -3802,7 +3730,7 @@ impl Connection {
                 (pkt_type == Type::Handshake &&
                     self.local_error
                         .as_ref()
-                        .is_some_and(|le| le.is_app))) &&
+                        .map_or(false, |le| le.is_app))) &&
             path.active()
         {
             let ack_delay = pkt_space.largest_rx_pkt_time.elapsed();
@@ -3886,10 +3814,6 @@ impl Connection {
                         //
                         // This usually happens when we try to send a new packet
                         // but failed because cwnd is almost full.
-                        //
-                        // In such case app_limited is set to false here to make
-                        // cwnd grow when ACK is received.
-                        active_path.recovery.update_app_limited(false);
                         return Err(Error::Done);
                     },
                 }
@@ -4355,10 +4279,6 @@ impl Connection {
                                     ack_eliciting = true;
                                     in_flight = true;
                                     dgram_emitted = true;
-                                    let _ =
-                                        self.dgram_sent_count.saturating_add(1);
-                                    let _ =
-                                        path.dgram_sent_count.saturating_add(1);
                                 }
                             },
 
@@ -4512,10 +4432,15 @@ impl Connection {
             path.recovery.ping_sent(epoch);
         }
 
+        if !has_data &&
+            !dgram_emitted &&
+            cwnd_available > frame::MAX_STREAM_OVERHEAD
+        {
+            path.recovery.on_app_limited();
+        }
+
         if frames.is_empty() {
-            // When we reach this point we are not able to write more, so set
-            // app_limited to false.
-            path.recovery.update_app_limited(false);
+            // When we reach this point we are not able to write more
             return Err(Error::Done);
         }
 
@@ -4605,9 +4530,14 @@ impl Connection {
                     EventData::PacketSent(qlog::events::quic::PacketSent {
                         header,
                         frames: Some(qlog_frames),
+                        is_coalesced: None,
+                        retry_token: None,
+                        stateless_reset_token: None,
+                        supported_versions: None,
                         raw: Some(qlog_raw_info),
+                        datagram_id: None,
                         send_at_time: Some(send_at_time),
-                        ..Default::default()
+                        trigger: None,
                     });
 
                 q.add_event_data_with_instant(ev_data, now).ok();
@@ -4632,25 +4562,12 @@ impl Connection {
         let sent_pkt = recovery::Sent {
             pkt_num: pn,
             frames,
-            time_sent: now,
-            time_acked: None,
-            time_lost: None,
             size: if ack_eliciting { written } else { 0 },
             ack_eliciting,
             in_flight,
-            delivered: 0,
-            delivered_time: now,
-            first_sent_time: now,
-            is_app_limited: false,
-            tx_in_flight: 0,
-            lost: 0,
             has_data,
             pmtud: pmtud_probe,
         };
-
-        if in_flight && is_app_limited {
-            path.recovery.delivery_rate_update_app_limited(true);
-        }
 
         self.next_pkt_num += 1;
 
@@ -4684,10 +4601,6 @@ impl Connection {
         self.sent_bytes += written as u64;
         path.sent_count += 1;
         path.sent_bytes += written as u64;
-
-        if self.dgram_send_queue.byte_size() > path.recovery.cwnd_available() {
-            path.recovery.update_app_limited(false);
-        }
 
         path.max_send_bytes = path.max_send_bytes.saturating_sub(written);
 
@@ -4727,6 +4640,7 @@ impl Connection {
     /// offloading mechanisms as the maximum limit for outgoing aggregates of
     /// multiple packets.
     #[inline]
+    #[deprecated = "For accurate pacing use `get_next_release_time` instead"]
     pub fn send_quantum(&self) -> usize {
         match self.paths.get_active() {
             Ok(p) => p.recovery.send_quantum(),
@@ -4745,6 +4659,7 @@ impl Connection {
     ///
     /// If the (`local_addr`, peer_addr`) 4-tuple relates to a non-existing
     /// path, this method returns 0.
+    #[deprecated = "For accurate pacing use `get_next_release_time` instead"]
     pub fn send_quantum_on_path(
         &self, local_addr: SocketAddr, peer_addr: SocketAddr,
     ) -> usize {
@@ -4753,6 +4668,36 @@ impl Connection {
             .and_then(|pid| self.paths.get(pid).ok())
             .map(|path| path.recovery.send_quantum())
             .unwrap_or(0)
+    }
+
+    /// Get the preferred send time for the next packet.
+    #[inline]
+    pub fn get_next_release_time(&self) -> Option<ReleaseDecision> {
+        self.paths
+            .get_active()
+            .map(|path| path.recovery.get_next_release_time())
+            .ok()
+    }
+
+    /// Get the preferred send time for the next packet.
+    #[inline]
+    pub fn get_next_release_time_on_path(
+        &self, local_addr: SocketAddr, peer_addr: SocketAddr,
+    ) -> Option<ReleaseDecision> {
+        self.paths
+            .path_id_from_addrs(&(local_addr, peer_addr))
+            .and_then(|pid| self.paths.get(pid).ok())
+            .map(|path| path.recovery.get_next_release_time())
+    }
+
+    /// The maximum pacing into the future, equals 1/8 of the smoothed rtt, but
+    /// not greater than 5ms
+    pub fn max_release_into_future(&self) -> time::Duration {
+        self.paths
+            .get_active()
+            .map(|p| p.recovery.rtt().mul_f64(0.125))
+            .unwrap_or(time::Duration::from_millis(1))
+            .min(time::Duration::from_millis(5))
     }
 
     /// Reads contiguous data from a stream into the provided slice.
@@ -4852,7 +4797,7 @@ impl Connection {
                 length: Some(read as u64),
                 from: Some(DataRecipient::Transport),
                 to: Some(DataRecipient::Application),
-                ..Default::default()
+                raw: None,
             });
 
             let now = time::Instant::now();
@@ -5041,7 +4986,7 @@ impl Connection {
                 length: Some(sent as u64),
                 from: Some(DataRecipient::Application),
                 to: Some(DataRecipient::Transport),
-                ..Default::default()
+                raw: None,
             });
 
             let now = time::Instant::now();
@@ -5141,7 +5086,7 @@ impl Connection {
             return Err(Error::InvalidStreamState(stream_id));
         }
 
-        // Don't try to reset a remote unidirectional stream.
+        // Dont' try to reset a remote unidirectional stream.
         if direction == Shutdown::Write &&
             !stream::is_local(stream_id, self.is_server) &&
             !stream::is_bidi(stream_id)
@@ -5720,14 +5665,6 @@ impl Connection {
 
         self.dgram_send_queue.push(buf.to_vec())?;
 
-        let active_path = self.paths.get_active_mut()?;
-
-        if self.dgram_send_queue.byte_size() >
-            active_path.recovery.cwnd_available()
-        {
-            active_path.recovery.update_app_limited(false);
-        }
-
         Ok(())
     }
 
@@ -5749,14 +5686,6 @@ impl Connection {
         }
 
         self.dgram_send_queue.push(buf)?;
-
-        let active_path = self.paths.get_active_mut()?;
-
-        if self.dgram_send_queue.byte_size() >
-            active_path.recovery.cwnd_available()
-        {
-            active_path.recovery.update_app_limited(false);
-        }
 
         Ok(())
     }
@@ -6136,7 +6065,7 @@ impl Connection {
     /// returning an [`IdLimit`] in the case the caller wants to retire still
     /// unannounced Connection IDs.
     ///
-    /// The caller is responsible for ensuring that the provided `scid` is not
+    /// The caller is responsible from ensuring that the provided `scid` is not
     /// repeated several times over the connection. quiche ensures that as long
     /// as the provided Connection ID is still in use (i.e., not retired), it
     /// does not assign a different sequence number.
@@ -6622,11 +6551,8 @@ impl Connection {
             retrans: self.retrans_count,
             sent_bytes: self.sent_bytes,
             recv_bytes: self.recv_bytes,
-            acked_bytes: self.acked_bytes,
             lost_bytes: self.lost_bytes,
             stream_retrans_bytes: self.stream_retrans_bytes,
-            dgram_recv: self.dgram_recv_count,
-            dgram_sent: self.dgram_sent_count,
             paths_count: self.paths.len(),
             reset_stream_count_local: self.reset_stream_local_count,
             stopped_stream_count_local: self.stopped_stream_local_count,
@@ -6805,11 +6731,8 @@ impl Connection {
                 let raw_params = self.handshake.quic_transport_params();
 
                 if !self.parsed_peer_transport_params && !raw_params.is_empty() {
-                    let peer_params = TransportParams::decode(
-                        raw_params,
-                        self.is_server,
-                        self.peer_transport_params_track_unknown,
-                    )?;
+                    let peer_params =
+                        TransportParams::decode(raw_params, self.is_server)?;
 
                     self.parse_peer_transport_params(peer_params)?;
                 }
@@ -6827,11 +6750,8 @@ impl Connection {
         let raw_params = self.handshake.quic_transport_params();
 
         if !self.parsed_peer_transport_params && !raw_params.is_empty() {
-            let peer_params = TransportParams::decode(
-                raw_params,
-                self.is_server,
-                self.peer_transport_params_track_unknown,
-            )?;
+            let peer_params =
+                TransportParams::decode(raw_params, self.is_server)?;
 
             self.parse_peer_transport_params(peer_params)?;
         }
@@ -6870,7 +6790,7 @@ impl Connection {
         if self
             .local_error
             .as_ref()
-            .is_some_and(|conn_err| !conn_err.is_app)
+            .map_or(false, |conn_err| !conn_err.is_app)
         {
             let epoch = match self.handshake.write_level() {
                 crypto::Level::Initial => packet::Epoch::Initial,
@@ -6879,7 +6799,7 @@ impl Connection {
                 crypto::Level::OneRTT => packet::Epoch::Application,
             };
 
-            if !self.handshake_confirmed {
+            if !self.is_established() {
                 match epoch {
                     // Downgrade the epoch to Handshake as the handshake is not
                     // completed yet.
@@ -6936,7 +6856,7 @@ impl Connection {
                 self.dgram_send_queue.has_pending() ||
                 self.local_error
                     .as_ref()
-                    .is_some_and(|conn_err| conn_err.is_app) ||
+                    .map_or(false, |conn_err| conn_err.is_app) ||
                 self.streams.should_update_max_streams_bidi() ||
                 self.streams.should_update_max_streams_uni() ||
                 self.streams.has_flushable() ||
@@ -7005,26 +6925,18 @@ impl Connection {
 
                 let handshake_status = self.handshake_status();
 
-                let is_app_limited = self.delivery_rate_check_if_app_limited();
-
                 for (_, p) in self.paths.iter_mut() {
-                    if is_app_limited {
-                        p.recovery.delivery_rate_update_app_limited(true);
-                    }
-
-                    let (lost_packets, lost_bytes, acked_bytes) =
-                        p.recovery.on_ack_received(
-                            &ranges,
-                            ack_delay,
-                            epoch,
-                            handshake_status,
-                            now,
-                            &self.trace_id,
-                        )?;
+                    let (lost_packets, lost_bytes) = p.recovery.on_ack_received(
+                        &ranges,
+                        ack_delay,
+                        epoch,
+                        handshake_status,
+                        now,
+                        &self.trace_id,
+                    );
 
                     self.lost_count += lost_packets;
                     self.lost_bytes += lost_bytes as u64;
-                    self.acked_bytes += acked_bytes as u64;
                 }
             },
 
@@ -7455,13 +7367,6 @@ impl Connection {
                 }
 
                 self.dgram_recv_queue.push(data)?;
-
-                let _ = self.dgram_recv_count.saturating_add(1);
-                let _ = self
-                    .paths
-                    .get_mut(recv_path_id)?
-                    .dgram_recv_count
-                    .saturating_add(1);
             },
 
             frame::Frame::DatagramHeader { .. } => unreachable!(),
@@ -7565,35 +7470,6 @@ impl Connection {
 
         self.tx_cap =
             cmp::min(cwin_available, self.max_tx_data - self.tx_data) as usize;
-    }
-
-    fn delivery_rate_check_if_app_limited(&self) -> bool {
-        // Enter the app-limited phase of delivery rate when these conditions
-        // are met:
-        //
-        // - The remaining capacity is higher than available bytes in cwnd (there
-        //   is more room to send).
-        // - New data since the last send() is smaller than available bytes in
-        //   cwnd (we queued less than what we can send).
-        // - There is room to send more data in cwnd.
-        //
-        // In application-limited phases the transmission rate is limited by the
-        // application rather than the congestion control algorithm.
-        //
-        // Note that this is equivalent to CheckIfApplicationLimited() from the
-        // delivery rate draft. This is also separate from `recovery.app_limited`
-        // and only applies to delivery rate calculation.
-        let cwin_available = self
-            .paths
-            .iter()
-            .filter(|&(_, p)| p.active())
-            .map(|(_, p)| p.recovery.cwnd_available())
-            .sum();
-
-        ((self.tx_buffered + self.dgram_send_queue_byte_size()) < cwin_available) &&
-            (self.tx_data.saturating_sub(self.last_tx_data)) <
-                cwin_available as u64 &&
-            cwin_available > 0
     }
 
     fn set_initial_dcid(
@@ -7702,7 +7578,7 @@ impl Connection {
             false,
         );
 
-        path.max_send_bytes = buf_len * self.max_amplification_factor;
+        path.max_send_bytes = buf_len * MAX_AMPLIFICATION_FACTOR;
         path.active_scid_seq = Some(in_scid_seq);
 
         // Automatically probes the new path.
@@ -7865,16 +7741,10 @@ impl Connection {
                 },
 
                 (true, false, Some(peer_error), None) => {
-                    let (connection_code, application_code, trigger) = if peer_error.is_app {
-                        (None, Some(qlog::events::ApplicationErrorCode::Value(peer_error.error_code)), None)
+                    let (connection_code, application_code) = if peer_error.is_app {
+                        (None, Some(qlog::events::ApplicationErrorCode::Value(peer_error.error_code)))
                     } else {
-                        let trigger = if peer_error.error_code == WireErrorCode::NoError as u64 {
-                            Some(qlog::events::connectivity::ConnectionClosedTrigger::Clean)
-                        } else {
-                            Some(qlog::events::connectivity::ConnectionClosedTrigger::Error)
-                        };
-
-                        (Some(qlog::events::ConnectionErrorCode::Value(peer_error.error_code)), None, trigger)
+                        (Some(qlog::events::ConnectionErrorCode::Value(peer_error.error_code)), None)
                     };
 
                     qlog::events::connectivity::ConnectionClosed {
@@ -7883,21 +7753,15 @@ impl Connection {
                         application_code,
                         internal_code: None,
                         reason: Some(String::from_utf8_lossy(&peer_error.reason).to_string()),
-                        trigger,
+                        trigger: Some(qlog::events::connectivity::ConnectionClosedTrigger::Error),
                     }
                 },
 
                 (true, false, None, Some(local_error)) => {
-                    let (connection_code, application_code, trigger) = if local_error.is_app {
-                        (None, Some(qlog::events::ApplicationErrorCode::Value(local_error.error_code)), None)
+                    let (connection_code, application_code) = if local_error.is_app {
+                        (None, Some(qlog::events::ApplicationErrorCode::Value(local_error.error_code)))
                     } else {
-                        let trigger = if local_error.error_code == WireErrorCode::NoError as u64 {
-                            Some(qlog::events::connectivity::ConnectionClosedTrigger::Clean)
-                        } else {
-                            Some(qlog::events::connectivity::ConnectionClosedTrigger::Error)
-                        };
-
-                        (Some(qlog::events::ConnectionErrorCode::Value(local_error.error_code)), None, trigger)
+                        (Some(qlog::events::ConnectionErrorCode::Value(local_error.error_code)), None)
                     };
 
                     qlog::events::connectivity::ConnectionClosed {
@@ -7906,7 +7770,7 @@ impl Connection {
                         application_code,
                         internal_code: None,
                         reason: Some(String::from_utf8_lossy(&local_error.reason).to_string()),
-                        trigger,
+                        trigger: Some(qlog::events::connectivity::ConnectionClosedTrigger::Error),
                     }
                 },
 
@@ -8012,20 +7876,11 @@ pub struct Stats {
     /// The number of received bytes.
     pub recv_bytes: u64,
 
-    /// The number of bytes sent acked.
-    pub acked_bytes: u64,
-
     /// The number of bytes sent lost.
     pub lost_bytes: u64,
 
     /// The number of stream bytes retransmitted.
     pub stream_retrans_bytes: u64,
-
-    /// The number of DATAGRAM frames received.
-    pub dgram_recv: usize,
-
-    /// The number of DATAGRAM frames sent.
-    pub dgram_sent: usize,
 
     /// The number of known paths for the connection.
     pub paths_count: usize,
@@ -8062,110 +7917,6 @@ impl std::fmt::Debug for Stats {
         )?;
 
         Ok(())
-    }
-}
-
-/// QUIC Unknown Transport Parameter.
-///
-/// A QUIC transport parameter that is not specifically recognized
-/// by this implementation.
-#[derive(Clone, Debug, PartialEq)]
-pub struct UnknownTransportParameter<T> {
-    /// The ID of the unknown transport parameter.
-    pub id: u64,
-
-    /// Original data representing the value of the unknown transport parameter.
-    pub value: T,
-}
-
-impl<T> UnknownTransportParameter<T> {
-    /// Checks whether an unknown Transport Parameter's ID is in the reserved
-    /// space.
-    ///
-    /// See Section 18.1 in [RFC9000](https://datatracker.ietf.org/doc/html/rfc9000#name-reserved-transport-paramete).
-    pub fn is_reserved(&self) -> bool {
-        let n = (self.id - 27) / 31;
-        self.id == 31 * n + 27
-    }
-}
-
-#[cfg(feature = "qlog")]
-impl From<UnknownTransportParameter<Vec<u8>>>
-    for qlog::events::quic::UnknownTransportParameter
-{
-    fn from(value: UnknownTransportParameter<Vec<u8>>) -> Self {
-        Self {
-            id: value.id,
-            value: qlog::HexSlice::maybe_string(Some(value.value.as_slice()))
-                .unwrap_or_default(),
-        }
-    }
-}
-
-impl From<UnknownTransportParameter<&[u8]>>
-    for UnknownTransportParameter<Vec<u8>>
-{
-    // When an instance of an UnknownTransportParameter is actually
-    // stored in UnknownTransportParameters, then we make a copy
-    // of the bytes if the source is an instance of an UnknownTransportParameter
-    // whose value is not owned.
-    fn from(value: UnknownTransportParameter<&[u8]>) -> Self {
-        Self {
-            id: value.id,
-            value: value.value.to_vec(),
-        }
-    }
-}
-
-/// Track unknown transport parameters, up to a limit.
-#[derive(Clone, Debug, PartialEq, Default)]
-pub struct UnknownTransportParameters {
-    /// The space remaining for storing unknown transport parameters.
-    pub capacity: usize,
-    /// The unknown transport parameters.
-    pub parameters: Vec<UnknownTransportParameter<Vec<u8>>>,
-}
-
-impl UnknownTransportParameters {
-    /// Pushes an unknown transport parameter into storage if there is space
-    /// remaining.
-    pub fn push(&mut self, new: UnknownTransportParameter<&[u8]>) -> Result<()> {
-        let new_unknown_tp_size = new.value.len() + std::mem::size_of::<u64>();
-        if new_unknown_tp_size < self.capacity {
-            self.capacity -= new_unknown_tp_size;
-            self.parameters.push(new.into());
-            Ok(())
-        } else {
-            Err(BufferTooShortError.into())
-        }
-    }
-}
-
-/// An Iterator over unknown transport parameters.
-pub struct UnknownTransportParameterIterator<'a> {
-    index: usize,
-    parameters: &'a Vec<UnknownTransportParameter<Vec<u8>>>,
-}
-
-impl<'a> IntoIterator for &'a UnknownTransportParameters {
-    type IntoIter = UnknownTransportParameterIterator<'a>;
-    type Item = &'a UnknownTransportParameter<Vec<u8>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        UnknownTransportParameterIterator {
-            index: 0,
-            parameters: &self.parameters,
-        }
-    }
-}
-
-impl<'a> Iterator for UnknownTransportParameterIterator<'a> {
-    type Item = &'a UnknownTransportParameter<Vec<u8>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let result = self.parameters.get(self.index);
-        self.index += 1;
-        result
     }
 }
 
@@ -8208,8 +7959,6 @@ pub struct TransportParams {
     pub retry_source_connection_id: Option<ConnectionId<'static>>,
     /// DATAGRAM frame extension parameter, if any.
     pub max_datagram_frame_size: Option<u64>,
-    /// Unknown peer transport parameters and values, if any.
-    pub unknown_params: Option<UnknownTransportParameters>,
     // pub preferred_address: ...,
 }
 
@@ -8233,26 +7982,16 @@ impl Default for TransportParams {
             initial_source_connection_id: None,
             retry_source_connection_id: None,
             max_datagram_frame_size: None,
-            unknown_params: Default::default(),
         }
     }
 }
 
 impl TransportParams {
-    fn decode(
-        buf: &[u8], is_server: bool, unknown_size: Option<usize>,
-    ) -> Result<TransportParams> {
+    fn decode(buf: &[u8], is_server: bool) -> Result<TransportParams> {
         let mut params = octets::Octets::with_slice(buf);
         let mut seen_params = HashSet::new();
 
         let mut tp = TransportParams::default();
-
-        if let Some(unknown_transport_param_tracking_size) = unknown_size {
-            tp.unknown_params = Some(UnknownTransportParameters {
-                capacity: unknown_transport_param_tracking_size,
-                parameters: vec![],
-            });
-        }
 
         while params.cap() > 0 {
             let id = params.get_varint()?;
@@ -8393,17 +8132,8 @@ impl TransportParams {
                     tp.max_datagram_frame_size = Some(val.get_varint()?);
                 },
 
-                // Track unknown transport parameters specially.
-                unknown_tp_id => {
-                    if let Some(unknown_params) = &mut tp.unknown_params {
-                        // It is _not_ an error not to have space enough to track
-                        // an unknown parameter.
-                        let _ = unknown_params.push(UnknownTransportParameter {
-                            id: unknown_tp_id,
-                            value: val.buf(),
-                        });
-                    }
-                },
+                // Ignore unknown parameters.
+                _ => (),
             }
         }
 
@@ -8582,13 +8312,16 @@ impl TransportParams {
             self.stateless_reset_token.map(|s| s.to_be_bytes()).as_ref(),
         );
 
-        let tls_cipher: Option<String> = cipher.map(|f| format!("{f:?}"));
-
         EventData::TransportParametersSet(
             qlog::events::quic::TransportParametersSet {
                 owner: Some(owner),
-                tls_cipher,
+                resumption_allowed: None,
+                early_data_enabled: None,
+                tls_cipher: Some(format!("{cipher:?}")),
+                aead_tag_length: None,
                 original_destination_connection_id,
+                initial_source_connection_id: None,
+                retry_source_connection_id: None,
                 stateless_reset_token,
                 disable_active_migration: Some(self.disable_active_migration),
                 max_idle_timeout: Some(self.max_idle_timeout),
@@ -8612,23 +8345,7 @@ impl TransportParams {
                 initial_max_streams_bidi: Some(self.initial_max_streams_bidi),
                 initial_max_streams_uni: Some(self.initial_max_streams_uni),
 
-                unknown_parameters: self
-                    .unknown_params
-                    .as_ref()
-                    .map(|unknown_params| {
-                        unknown_params
-                            .into_iter()
-                            .cloned()
-                            .map(
-                                Into::<
-                                    qlog::events::quic::UnknownTransportParameter,
-                                >::into,
-                            )
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-
-                ..Default::default()
+                preferred_address: None,
             },
         )
     }
@@ -9171,7 +8888,6 @@ mod tests {
             initial_source_connection_id: Some(b"woot woot".to_vec().into()),
             retry_source_connection_id: Some(b"retry".to_vec().into()),
             max_datagram_frame_size: Some(32),
-            unknown_params: Default::default(),
         };
 
         let mut raw_params = [42; 256];
@@ -9179,7 +8895,7 @@ mod tests {
             TransportParams::encode(&tp, true, &mut raw_params).unwrap();
         assert_eq!(raw_params.len(), 94);
 
-        let new_tp = TransportParams::decode(raw_params, false, None).unwrap();
+        let new_tp = TransportParams::decode(raw_params, false).unwrap();
 
         assert_eq!(new_tp, tp);
 
@@ -9202,7 +8918,6 @@ mod tests {
             initial_source_connection_id: Some(b"woot woot".to_vec().into()),
             retry_source_connection_id: None,
             max_datagram_frame_size: Some(32),
-            unknown_params: Default::default(),
         };
 
         let mut raw_params = [42; 256];
@@ -9210,7 +8925,7 @@ mod tests {
             TransportParams::encode(&tp, false, &mut raw_params).unwrap();
         assert_eq!(raw_params.len(), 69);
 
-        let new_tp = TransportParams::decode(raw_params, true, None).unwrap();
+        let new_tp = TransportParams::decode(raw_params, true).unwrap();
 
         assert_eq!(new_tp, tp);
     }
@@ -9230,7 +8945,6 @@ mod tests {
         let tp = TransportParams::decode(
             initial_source_connection_id_raw.as_slice(),
             true,
-            None,
         )
         .unwrap();
 
@@ -9246,95 +8960,11 @@ mod tests {
 
         // Decoding fails.
         assert_eq!(
-            TransportParams::decode(raw_params.as_slice(), true, None),
+            TransportParams::decode(raw_params.as_slice(), true),
             Err(Error::InvalidTransportParam)
         );
     }
 
-    #[test]
-    fn transport_params_unknown_zero_space() {
-        let mut unknown_params: UnknownTransportParameters =
-            UnknownTransportParameters {
-                capacity: 0,
-                parameters: vec![],
-            };
-        let massive_unknown_param = UnknownTransportParameter::<&[u8]> {
-            id: 5,
-            value: &[0xau8; 280],
-        };
-        assert!(unknown_params.push(massive_unknown_param).is_err());
-        assert!(unknown_params.capacity == 0);
-        assert!(unknown_params.parameters.is_empty());
-    }
-
-    #[test]
-    fn transport_params_unknown_max_space_respected() {
-        let mut unknown_params: UnknownTransportParameters =
-            UnknownTransportParameters {
-                capacity: 256,
-                parameters: vec![],
-            };
-
-        let massive_unknown_param = UnknownTransportParameter::<&[u8]> {
-            id: 5,
-            value: &[0xau8; 280],
-        };
-        let big_unknown_param = UnknownTransportParameter::<&[u8]> {
-            id: 5,
-            value: &[0xau8; 232],
-        };
-        let little_unknown_param = UnknownTransportParameter::<&[u8]> {
-            id: 6,
-            value: &[0xau8; 7],
-        };
-
-        assert!(unknown_params.push(massive_unknown_param).is_err());
-        assert!(unknown_params.capacity == 256);
-        assert!(unknown_params.parameters.is_empty());
-
-        unknown_params.push(big_unknown_param).unwrap();
-        assert!(unknown_params.capacity == 16);
-        assert!(unknown_params.parameters.len() == 1);
-
-        unknown_params.push(little_unknown_param.clone()).unwrap();
-        assert!(unknown_params.capacity == 1);
-        assert!(unknown_params.parameters.len() == 2);
-
-        assert!(unknown_params.push(little_unknown_param).is_err());
-
-        let mut unknown_params_iter = unknown_params.into_iter();
-
-        let unknown_params_first = unknown_params_iter
-            .next()
-            .expect("Should have a 0th element.");
-        assert!(
-            unknown_params_first.id == 5 &&
-                unknown_params_first.value == vec![0xau8; 232]
-        );
-
-        let unknown_params_second = unknown_params_iter
-            .next()
-            .expect("Should have a 1th element.");
-        assert!(
-            unknown_params_second.id == 6 &&
-                unknown_params_second.value == vec![0xau8; 7]
-        );
-    }
-
-    #[test]
-    fn transport_params_unknown_is_reserved() {
-        let reserved_unknown_param = UnknownTransportParameter::<&[u8]> {
-            id: 31 * 17 + 27,
-            value: &[0xau8; 280],
-        };
-        let not_reserved_unknown_param = UnknownTransportParameter::<&[u8]> {
-            id: 32 * 17 + 27,
-            value: &[0xau8; 280],
-        };
-
-        assert!(reserved_unknown_param.is_reserved());
-        assert!(!not_reserved_unknown_param.is_reserved());
-    }
     #[test]
     fn unknown_version() {
         let mut config = Config::new(0xbabababa).unwrap();
@@ -9526,40 +9156,6 @@ mod tests {
         assert_eq!(
             pipe.server_recv(&mut buf[..len]),
             Err(Error::InvalidTransportParam)
-        );
-    }
-
-    #[test]
-    fn change_idle_timeout() {
-        let mut config = Config::new(0x1).unwrap();
-        config
-            .set_application_protos(&[b"proto1", b"proto2"])
-            .unwrap();
-        config.set_max_idle_timeout(999999);
-        config.verify_peer(false);
-
-        let mut pipe = testing::Pipe::with_client_config(&mut config).unwrap();
-        assert_eq!(pipe.client.local_transport_params.max_idle_timeout, 999999);
-        assert_eq!(pipe.client.peer_transport_params.max_idle_timeout, 0);
-        assert_eq!(pipe.server.local_transport_params.max_idle_timeout, 0);
-        assert_eq!(pipe.server.peer_transport_params.max_idle_timeout, 0);
-
-        pipe.client.set_max_idle_timeout(456000).unwrap();
-        pipe.server.set_max_idle_timeout(234000).unwrap();
-        assert_eq!(pipe.client.local_transport_params.max_idle_timeout, 456000);
-        assert_eq!(pipe.client.peer_transport_params.max_idle_timeout, 0);
-        assert_eq!(pipe.server.local_transport_params.max_idle_timeout, 234000);
-        assert_eq!(pipe.server.peer_transport_params.max_idle_timeout, 0);
-
-        assert_eq!(pipe.handshake(), Ok(()));
-
-        assert_eq!(
-            pipe.client.idle_timeout(),
-            Some(time::Duration::from_millis(234000))
-        );
-        assert_eq!(
-            pipe.server.idle_timeout(),
-            Some(time::Duration::from_millis(234000))
         );
     }
 
@@ -10029,34 +9625,6 @@ mod tests {
     }
 
     #[test]
-    fn custom_limit_handshake_data() {
-        const CUSTOM_AMPLIFICATION_FACTOR: usize = 2;
-
-        let mut config = Config::new(PROTOCOL_VERSION).unwrap();
-        config
-            .load_cert_chain_from_pem_file("examples/cert-big.crt")
-            .unwrap();
-        config
-            .load_priv_key_from_pem_file("examples/cert.key")
-            .unwrap();
-        config
-            .set_application_protos(&[b"proto1", b"proto2"])
-            .unwrap();
-        config.set_max_amplification_factor(CUSTOM_AMPLIFICATION_FACTOR);
-
-        let mut pipe = testing::Pipe::with_server_config(&mut config).unwrap();
-
-        let flight = testing::emit_flight(&mut pipe.client).unwrap();
-        let client_sent = flight.iter().fold(0, |out, p| out + p.0.len());
-        testing::process_flight(&mut pipe.server, flight).unwrap();
-
-        let flight = testing::emit_flight(&mut pipe.server).unwrap();
-        let server_sent = flight.iter().fold(0, |out, p| out + p.0.len());
-
-        assert_eq!(server_sent, client_sent * CUSTOM_AMPLIFICATION_FACTOR);
-    }
-
-    #[test]
     fn stream() {
         let mut pipe = testing::Pipe::new().unwrap();
         assert_eq!(pipe.handshake(), Ok(()));
@@ -10245,27 +9813,15 @@ mod tests {
         );
 
         // Server sends message with the new key.
-        assert_eq!(pipe.server.stream_send(4, b"world", false), Ok(5));
+        assert_eq!(pipe.server.stream_send(4, b"world", true), Ok(5));
         assert_eq!(pipe.advance(), Ok(()));
 
         // Ensure update key is completed and client can decrypt packet.
         let mut r = pipe.client.readable();
         assert_eq!(r.next(), Some(4));
         assert_eq!(r.next(), None);
-        assert_eq!(pipe.client.stream_recv(4, &mut b), Ok((5, false)));
+        assert_eq!(pipe.client.stream_recv(4, &mut b), Ok((5, true)));
         assert_eq!(&b[..5], b"world");
-
-        // Server keeps sending packets to ensure encryption still works.
-        for _ in 0..10 {
-            assert_eq!(pipe.server.stream_send(4, b"world", false), Ok(5));
-            assert_eq!(pipe.advance(), Ok(()));
-
-            let mut r = pipe.client.readable();
-            assert_eq!(r.next(), Some(4));
-            assert_eq!(r.next(), None);
-            assert_eq!(pipe.client.stream_recv(4, &mut b), Ok((5, false)));
-            assert_eq!(&b[..5], b"world");
-        }
     }
 
     #[test]
@@ -11459,7 +11015,11 @@ mod tests {
         assert_eq!(r.next(), Some(0));
         assert_eq!(r.next(), None);
 
-        while pipe.server.stream_send(0, b"world", false) != Err(Error::Done) {
+        loop {
+            if pipe.server.stream_send(0, b"world", false) == Err(Error::Done) {
+                break;
+            }
+
             assert_eq!(pipe.advance(), Ok(()));
         }
 
@@ -12408,7 +11968,7 @@ mod tests {
         let epoch = packet::Type::Initial.to_epoch().unwrap();
 
         let pn = 0;
-        let pn_len = packet::pkt_num_len(pn, 0);
+        let pn_len = packet::pkt_num_len(pn).unwrap();
 
         let dcid = pipe.client.destination_id();
         let scid = pipe.client.source_id();
@@ -12433,7 +11993,7 @@ mod tests {
         let len = pn_len + payload_len;
         b.put_varint(len as u64).unwrap();
 
-        packet::encode_pkt_num(pn, pn_len, &mut b).unwrap();
+        packet::encode_pkt_num(pn, &mut b).unwrap();
 
         let payload_offset = b.off();
 
@@ -12510,157 +12070,6 @@ mod tests {
         assert_eq!(pipe.handshake(), Ok(()));
 
         assert_eq!(pipe.server_recv(&mut buf[..0]), Err(Error::BufferTooShort));
-    }
-
-    #[test]
-    fn stop_sending_before_flushed_packets() {
-        let mut b = [0; 15];
-
-        let mut buf = [0; 65535];
-
-        let mut pipe = testing::Pipe::new().unwrap();
-        assert_eq!(pipe.handshake(), Ok(()));
-
-        // Client sends some data, and closes stream.
-        assert_eq!(pipe.client.stream_send(0, b"hello", true), Ok(5));
-        assert_eq!(pipe.advance(), Ok(()));
-
-        // Server gets data.
-        let mut r = pipe.server.readable();
-        assert_eq!(r.next(), Some(0));
-        assert_eq!(r.next(), None);
-
-        assert_eq!(pipe.server.stream_recv(0, &mut b), Ok((5, true)));
-        assert!(pipe.server.stream_finished(0));
-
-        let mut r = pipe.server.readable();
-        assert_eq!(r.next(), None);
-
-        // Server sends data, until blocked.
-        let mut r = pipe.server.writable();
-        assert_eq!(r.next(), Some(0));
-        assert_eq!(r.next(), None);
-
-        while pipe.server.stream_send(0, b"world", false) != Err(Error::Done) {}
-
-        let mut r = pipe.server.writable();
-        assert_eq!(r.next(), None);
-
-        // Client sends STOP_SENDING.
-        let frames = [frame::Frame::StopSending {
-            stream_id: 0,
-            error_code: 42,
-        }];
-
-        let pkt_type = packet::Type::Short;
-        let len = pipe
-            .send_pkt_to_server(pkt_type, &frames, &mut buf)
-            .unwrap();
-
-        // Server sent a RESET_STREAM frame in response.
-        let frames =
-            testing::decode_pkt(&mut pipe.client, &mut buf[..len]).unwrap();
-
-        let mut iter = frames.iter();
-
-        // Skip ACK frame.
-        iter.next();
-
-        assert_eq!(
-            iter.next(),
-            Some(&frame::Frame::ResetStream {
-                stream_id: 0,
-                error_code: 42,
-                final_size: 0,
-            })
-        );
-
-        // Stream is writable, but writing returns an error.
-        let mut r = pipe.server.writable();
-        assert_eq!(r.next(), Some(0));
-        assert_eq!(r.next(), None);
-
-        assert_eq!(
-            pipe.server.stream_send(0, b"world", true),
-            Err(Error::StreamStopped(42)),
-        );
-
-        assert_eq!(pipe.server.streams.len(), 1);
-
-        // Client acks RESET_STREAM frame.
-        let mut ranges = ranges::RangeSet::default();
-        ranges.insert(0..6);
-
-        let frames = [frame::Frame::ACK {
-            ack_delay: 15,
-            ranges,
-            ecn_counts: None,
-        }];
-
-        assert_eq!(pipe.send_pkt_to_server(pkt_type, &frames, &mut buf), Ok(0));
-
-        // Client has ACK'd the RESET_STREAM so the stream is collected.
-        assert_eq!(pipe.server.streams.len(), 0);
-    }
-
-    #[test]
-    fn reset_before_flushed_packets() {
-        let mut b = [0; 15];
-
-        let mut config = Config::new(crate::PROTOCOL_VERSION).unwrap();
-        config
-            .load_cert_chain_from_pem_file("examples/cert.crt")
-            .unwrap();
-        config
-            .load_priv_key_from_pem_file("examples/cert.key")
-            .unwrap();
-        config
-            .set_application_protos(&[b"proto1", b"proto2"])
-            .unwrap();
-        config.set_initial_max_data(30);
-        config.set_initial_max_stream_data_bidi_local(5);
-        config.set_initial_max_stream_data_bidi_remote(15);
-        config.set_initial_max_streams_bidi(3);
-        config.verify_peer(false);
-
-        let mut pipe = testing::Pipe::with_config(&mut config).unwrap();
-        assert_eq!(pipe.handshake(), Ok(()));
-
-        // Client sends some data, and closes stream.
-        assert_eq!(pipe.client.stream_send(0, b"hello", true), Ok(5));
-        assert_eq!(pipe.advance(), Ok(()));
-
-        // Server gets data.
-        let mut r = pipe.server.readable();
-        assert_eq!(r.next(), Some(0));
-        assert_eq!(r.next(), None);
-
-        assert_eq!(pipe.server.stream_recv(0, &mut b), Ok((5, true)));
-        assert!(pipe.server.stream_finished(0));
-
-        let mut r = pipe.server.readable();
-        assert_eq!(r.next(), None);
-
-        // Server sends data and is blocked by small stream flow control.
-        let mut r = pipe.server.writable();
-        assert_eq!(r.next(), Some(0));
-        assert_eq!(r.next(), None);
-
-        assert_eq!(pipe.server.stream_send(0, b"helloworld", false), Ok(5));
-        assert_eq!(pipe.advance(), Ok(()));
-
-        // Client reads to give flow control back.
-        assert_eq!(pipe.client.stream_recv(0, &mut b), Ok((5, false)));
-        assert_eq!(pipe.advance(), Ok(()));
-
-        // Server writes stream data and resets the stream before sending a
-        // packet.
-        assert_eq!(pipe.server.stream_send(0, b"world", false), Ok(5));
-        pipe.server.stream_shutdown(0, Shutdown::Write, 42).unwrap();
-        assert_eq!(pipe.advance(), Ok(()));
-
-        // Client has ACK'd the RESET_STREAM so the stream is collected.
-        assert_eq!(pipe.server.streams.len(), 0);
     }
 
     #[test]
@@ -13072,92 +12481,22 @@ mod tests {
         // Client receives Retry and sends new Initial.
         assert_eq!(pipe.client_recv(&mut buf[..len]), Ok(len));
 
-        let (len, send_info) = pipe.client.send(&mut buf).unwrap();
+        let (len, _) = pipe.client.send(&mut buf).unwrap();
 
         let hdr = Header::from_slice(&mut buf[..len], MAX_CONN_ID_LEN).unwrap();
         assert_eq!(&hdr.token.unwrap(), token);
 
         // Server accepts connection.
+        let from = "127.0.0.1:1234".parse().unwrap();
         pipe.server = accept(
             &scid,
             Some(&odcid),
             testing::Pipe::server_addr(),
-            send_info.from,
+            from,
             &mut config,
         )
         .unwrap();
         assert_eq!(pipe.server_recv(&mut buf[..len]), Ok(len));
-
-        assert_eq!(pipe.advance(), Ok(()));
-
-        assert!(pipe.client.is_established());
-        assert!(pipe.server.is_established());
-    }
-
-    #[test]
-    fn retry_with_pto() {
-        let mut buf = [0; 65535];
-
-        let mut config = Config::new(PROTOCOL_VERSION).unwrap();
-        config
-            .load_cert_chain_from_pem_file("examples/cert.crt")
-            .unwrap();
-        config
-            .load_priv_key_from_pem_file("examples/cert.key")
-            .unwrap();
-        config
-            .set_application_protos(&[b"proto1", b"proto2"])
-            .unwrap();
-
-        let mut pipe = testing::Pipe::with_server_config(&mut config).unwrap();
-
-        // Client sends initial flight.
-        let (mut len, _) = pipe.client.send(&mut buf).unwrap();
-
-        // Server sends Retry packet.
-        let hdr = Header::from_slice(&mut buf[..len], MAX_CONN_ID_LEN).unwrap();
-
-        let odcid = hdr.dcid.clone();
-
-        let mut scid = [0; MAX_CONN_ID_LEN];
-        rand::rand_bytes(&mut scid[..]);
-        let scid = ConnectionId::from_ref(&scid);
-
-        let token = b"quiche test retry token";
-
-        len = packet::retry(
-            &hdr.scid,
-            &hdr.dcid,
-            &scid,
-            token,
-            hdr.version,
-            &mut buf,
-        )
-        .unwrap();
-
-        // Client receives Retry and sends new Initial.
-        assert_eq!(pipe.client_recv(&mut buf[..len]), Ok(len));
-
-        let (len, send_info) = pipe.client.send(&mut buf).unwrap();
-
-        let hdr = Header::from_slice(&mut buf[..len], MAX_CONN_ID_LEN).unwrap();
-        assert_eq!(&hdr.token.unwrap(), token);
-
-        // Server accepts connection.
-        pipe.server = accept(
-            &scid,
-            Some(&odcid),
-            testing::Pipe::server_addr(),
-            send_info.from,
-            &mut config,
-        )
-        .unwrap();
-        assert_eq!(pipe.server_recv(&mut buf[..len]), Ok(len));
-
-        // Wait for the client's PTO so it will try to send an Initial again.
-        let timer = pipe.client.timeout().unwrap();
-        std::thread::sleep(timer + time::Duration::from_millis(1));
-        pipe.client.on_timeout();
 
         assert_eq!(pipe.advance(), Ok(()));
 
@@ -14746,20 +14085,13 @@ mod tests {
             assert_eq!(pipe.client.dgram_send(&send_buf), Ok(()));
         }
 
-        assert!(!pipe
-            .client
-            .paths
-            .get_active()
-            .expect("no active")
-            .recovery
-            .app_limited());
         assert_eq!(pipe.client.dgram_send_queue.byte_size(), 1_000_000);
 
         let (len, _) = pipe.client.send(&mut buf).unwrap();
 
         assert_ne!(pipe.client.dgram_send_queue.byte_size(), 0);
         assert_ne!(pipe.client.dgram_send_queue.byte_size(), 1_000_000);
-        assert!(!pipe
+        assert!(pipe
             .client
             .paths
             .get_active()
@@ -14770,6 +14102,14 @@ mod tests {
         assert_eq!(pipe.server_recv(&mut buf[..len]), Ok(len));
 
         let flight = testing::emit_flight(&mut pipe.client).unwrap();
+
+        assert!(!pipe
+            .client
+            .paths
+            .get_active()
+            .expect("no active")
+            .recovery
+            .app_limited());
         testing::process_flight(&mut pipe.server, flight).unwrap();
 
         let flight = testing::emit_flight(&mut pipe.server).unwrap();
@@ -14778,7 +14118,7 @@ mod tests {
         assert_ne!(pipe.client.dgram_send_queue.byte_size(), 0);
         assert_ne!(pipe.client.dgram_send_queue.byte_size(), 1_000_000);
 
-        assert!(!pipe
+        assert!(pipe
             .client
             .paths
             .get_active()
@@ -15340,48 +14680,6 @@ mod tests {
                 is_app: true,
                 error_code: 123,
                 reason: b"Invalid authentication".to_vec()
-            })
-        );
-    }
-
-    #[test]
-    fn transport_close_by_client_during_handshake_established() {
-        let mut pipe = testing::Pipe::new().unwrap();
-
-        // Client sends initial flight.
-        let flight = testing::emit_flight(&mut pipe.client).unwrap();
-        testing::process_flight(&mut pipe.server, flight).unwrap();
-
-        let flight = testing::emit_flight(&mut pipe.server).unwrap();
-
-        // Both connections are not established.
-        assert!(!pipe.client.is_established() && !pipe.server.is_established());
-
-        testing::process_flight(&mut pipe.client, flight).unwrap();
-
-        // Connection is established on the client.
-        assert!(pipe.client.is_established());
-
-        // Client sends after connection is established.
-        pipe.client.close(false, 123, b"connection close").unwrap();
-
-        let flight = testing::emit_flight(&mut pipe.client).unwrap();
-        testing::process_flight(&mut pipe.server, flight).unwrap();
-
-        assert_eq!(
-            pipe.server.peer_error(),
-            Some(&ConnectionError {
-                is_app: false,
-                error_code: 123,
-                reason: b"connection close".to_vec()
-            })
-        );
-        assert_eq!(
-            pipe.client.local_error(),
-            Some(&ConnectionError {
-                is_app: false,
-                error_code: 123,
-                reason: b"connection close".to_vec()
             })
         );
     }
@@ -17492,7 +16790,11 @@ mod tests {
         assert_eq!(pipe.server.stream_writable(0, 0), Ok(true));
 
         // Server sends data on stream 0, until blocked.
-        while pipe.server.stream_send(0, b"world", false) != Err(Error::Done) {
+        loop {
+            if pipe.server.stream_send(0, b"world", false) == Err(Error::Done) {
+                break;
+            }
+
             assert_eq!(pipe.advance(), Ok(()));
         }
 
@@ -17802,7 +17104,8 @@ pub use crate::path::PathEvent;
 pub use crate::path::PathStats;
 pub use crate::path::SocketAddrIter;
 
-pub use crate::recovery::congestion::CongestionControlAlgorithm;
+pub use crate::recovery::CongestionControlAlgorithm;
+pub use crate::recovery::ReleaseDecision;
 
 pub use crate::stream::StreamIter;
 
