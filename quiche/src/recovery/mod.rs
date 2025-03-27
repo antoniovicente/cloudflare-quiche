@@ -195,6 +195,32 @@ pub trait RecoveryApi {
     #[cfg(test)]
     fn app_limited(&self) -> bool;
 
+    #[cfg(test)]
+    fn sent_packets_len(&self, epoch: packet::Epoch) -> usize;
+
+    #[cfg(test)]
+    fn bytes_in_flight(&self) -> usize;
+
+    #[cfg(test)]
+    fn in_flight_count(&self, epoch: packet::Epoch) -> usize;
+
+    #[cfg(test)]
+    fn pacing_rate(&self) -> u64;
+
+    #[cfg(test)]
+    fn pto_count(&self) -> u32;
+
+    #[cfg(test)]
+    fn pkt_thresh(&self) -> u64;
+
+    #[cfg(test)]
+    fn lost_spurious_count(&self) -> usize;
+
+    #[cfg(test)]
+    fn detect_lost_packets_for_test(
+        &mut self, epoch: packet::Epoch, now: Instant,
+    ) -> (usize, usize);
+
     fn update_app_limited(&mut self, v: bool);
 
     fn delivery_rate_update_app_limited(&mut self, v: bool);
@@ -209,6 +235,11 @@ pub trait RecoveryApi {
 impl Recovery {
     pub fn new_with_config(recovery_config: &RecoveryConfig) -> Self {
         Recovery::from(LegacyRecovery::new_with_config(recovery_config))
+    }
+
+    #[cfg(test)]
+    pub fn new(config: &crate::Config) -> Self {
+        Self::new_with_config(&RecoveryConfig::from_config(config))
     }
 }
 
@@ -464,11 +495,11 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = Recovery::new(&cfg);
 
         let mut now = Instant::now();
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
 
         // Start by sending a few packets.
         let p = Sent {
@@ -498,8 +529,8 @@ mod tests {
             "",
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
-        assert_eq!(r.bytes_in_flight, 1000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 1);
+        assert_eq!(r.bytes_in_flight(), 1000);
 
         let p = Sent {
             pkt_num: 1,
@@ -528,8 +559,8 @@ mod tests {
             "",
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 2000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 2);
+        assert_eq!(r.bytes_in_flight(), 2000);
 
         let p = Sent {
             pkt_num: 2,
@@ -557,8 +588,8 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
-        assert_eq!(r.bytes_in_flight, 3000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 3);
+        assert_eq!(r.bytes_in_flight(), 3000);
 
         let p = Sent {
             pkt_num: 3,
@@ -586,8 +617,8 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
-        assert_eq!(r.bytes_in_flight, 4000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 4);
+        assert_eq!(r.bytes_in_flight(), 4000);
 
         // Wait for 10ms.
         now += Duration::from_millis(10);
@@ -608,18 +639,18 @@ mod tests {
             (0, 0, 2 * 1000)
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 2000);
-        assert_eq!(r.congestion.lost_count, 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 2);
+        assert_eq!(r.bytes_in_flight(), 2000);
+        assert_eq!(r.lost_count(), 0);
 
         // Wait until loss detection timer expires.
         now = r.loss_detection_timer().unwrap();
 
         // PTO.
         r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
-        assert_eq!(r.epochs[packet::Epoch::Application].loss_probes, 1);
-        assert_eq!(r.congestion.lost_count, 0);
-        assert_eq!(r.pto_count, 1);
+        assert_eq!(r.loss_probes(packet::Epoch::Application), 1);
+        assert_eq!(r.lost_count(), 0);
+        assert_eq!(r.pto_count(), 1);
 
         let p = Sent {
             pkt_num: 4,
@@ -647,8 +678,8 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
-        assert_eq!(r.bytes_in_flight, 3000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 3);
+        assert_eq!(r.bytes_in_flight(), 3000);
 
         let p = Sent {
             pkt_num: 5,
@@ -676,9 +707,9 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
-        assert_eq!(r.bytes_in_flight, 4000);
-        assert_eq!(r.congestion.lost_count, 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 4);
+        assert_eq!(r.bytes_in_flight(), 4000);
+        assert_eq!(r.lost_count(), 0);
 
         // Wait for 10ms.
         now += Duration::from_millis(10);
@@ -699,17 +730,20 @@ mod tests {
             (2, 2000, 2 * 1000)
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
-        assert_eq!(r.bytes_in_flight, 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 4);
+        assert_eq!(r.bytes_in_flight(), 0);
 
-        assert_eq!(r.congestion.lost_count, 2);
+        assert_eq!(r.lost_count(), 2);
 
         // Wait 1 RTT.
         now += r.rtt();
 
-        r.detect_lost_packets(packet::Epoch::Application, now, "");
+        assert_eq!(
+            r.detect_lost_packets_for_test(packet::Epoch::Application, now),
+            (0, 0)
+        );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
     }
 
     #[test]
@@ -717,11 +751,11 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = Recovery::new(&cfg);
 
         let mut now = Instant::now();
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
 
         // Start by sending a few packets.
         let p = Sent {
@@ -750,8 +784,8 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
-        assert_eq!(r.bytes_in_flight, 1000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 1);
+        assert_eq!(r.bytes_in_flight(), 1000);
 
         let p = Sent {
             pkt_num: 1,
@@ -779,8 +813,8 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 2000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 2);
+        assert_eq!(r.bytes_in_flight(), 2000);
 
         let p = Sent {
             pkt_num: 2,
@@ -808,8 +842,8 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
-        assert_eq!(r.bytes_in_flight, 3000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 3);
+        assert_eq!(r.bytes_in_flight(), 3000);
 
         let p = Sent {
             pkt_num: 3,
@@ -837,8 +871,8 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
-        assert_eq!(r.bytes_in_flight, 4000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 4);
+        assert_eq!(r.bytes_in_flight(), 4000);
 
         // Wait for 10ms.
         now += Duration::from_millis(10);
@@ -860,28 +894,31 @@ mod tests {
             (0, 0, 3 * 1000)
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 1000);
-        assert_eq!(r.congestion.lost_count, 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 2);
+        assert_eq!(r.bytes_in_flight(), 1000);
+        assert_eq!(r.lost_count(), 0);
 
         // Wait until loss detection timer expires.
         now = r.loss_detection_timer().unwrap();
 
         // Packet is declared lost.
         r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
-        assert_eq!(r.epochs[packet::Epoch::Application].loss_probes, 0);
+        assert_eq!(r.loss_probes(packet::Epoch::Application), 0);
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 2);
+        assert_eq!(r.bytes_in_flight(), 0);
 
-        assert_eq!(r.congestion.lost_count, 1);
+        assert_eq!(r.lost_count(), 1);
 
         // Wait 1 RTT.
         now += r.rtt();
 
-        r.detect_lost_packets(packet::Epoch::Application, now, "");
+        assert_eq!(
+            r.detect_lost_packets_for_test(packet::Epoch::Application, now),
+            (0, 0)
+        );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
     }
 
     #[test]
@@ -889,11 +926,11 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = Recovery::new(&cfg);
 
         let mut now = Instant::now();
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
 
         // Start by sending a few packets.
         let p = Sent {
@@ -922,8 +959,8 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
-        assert_eq!(r.bytes_in_flight, 1000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 1);
+        assert_eq!(r.bytes_in_flight(), 1000);
 
         let p = Sent {
             pkt_num: 1,
@@ -951,8 +988,8 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 2000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 2);
+        assert_eq!(r.bytes_in_flight(), 2000);
 
         let p = Sent {
             pkt_num: 2,
@@ -980,8 +1017,8 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
-        assert_eq!(r.bytes_in_flight, 3000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 3);
+        assert_eq!(r.bytes_in_flight(), 3000);
 
         let p = Sent {
             pkt_num: 3,
@@ -1009,8 +1046,8 @@ mod tests {
             now,
             "",
         );
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 4);
-        assert_eq!(r.bytes_in_flight, 4000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 4);
+        assert_eq!(r.bytes_in_flight(), 4000);
 
         // Wait for 10ms.
         now += Duration::from_millis(10);
@@ -1036,7 +1073,7 @@ mod tests {
         let mut acked = ranges::RangeSet::default();
         acked.insert(0..2);
 
-        assert_eq!(r.pkt_thresh, INITIAL_PACKET_THRESHOLD);
+        assert_eq!(r.pkt_thresh(), INITIAL_PACKET_THRESHOLD);
 
         assert_eq!(
             r.on_ack_received(
@@ -1050,22 +1087,25 @@ mod tests {
             (0, 0, 1000)
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
-        assert_eq!(r.bytes_in_flight, 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
+        assert_eq!(r.bytes_in_flight(), 0);
 
         // Spurious loss.
-        assert_eq!(r.congestion.lost_count, 1);
-        assert_eq!(r.lost_spurious_count, 1);
+        assert_eq!(r.lost_count(), 1);
+        assert_eq!(r.lost_spurious_count(), 1);
 
         // Packet threshold was increased.
-        assert_eq!(r.pkt_thresh, 4);
+        assert_eq!(r.pkt_thresh(), 4);
 
         // Wait 1 RTT.
         now += r.rtt();
 
-        r.detect_lost_packets(packet::Epoch::Application, now, "");
+        assert_eq!(
+            r.detect_lost_packets_for_test(packet::Epoch::Application, now),
+            (0, 0)
+        );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
     }
 
     #[test]
@@ -1073,11 +1113,11 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::CUBIC);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = Recovery::new(&cfg);
 
         let mut now = Instant::now();
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
 
         // send out first packet (a full initcwnd).
         let p = Sent {
@@ -1107,11 +1147,11 @@ mod tests {
             "",
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
-        assert_eq!(r.bytes_in_flight, 12000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 1);
+        assert_eq!(r.bytes_in_flight(), 12000);
 
         // First packet will be sent out immediately.
-        assert_eq!(r.congestion.pacer.rate(), 0);
+        assert_eq!(r.pacing_rate(), 0);
         assert_eq!(r.get_packet_send_time(), now);
 
         // Wait 50ms for ACK.
@@ -1132,9 +1172,9 @@ mod tests {
             (0, 0, 12000)
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
-        assert_eq!(r.bytes_in_flight, 0);
-        assert_eq!(r.rtt_stats.smoothed_rtt, Duration::from_millis(50));
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
+        assert_eq!(r.bytes_in_flight(), 0);
+        assert_eq!(r.rtt(), Duration::from_millis(50));
 
         // 1 MSS increased.
         assert_eq!(r.cwnd(), 12000 + 1200);
@@ -1167,8 +1207,8 @@ mod tests {
             "",
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
-        assert_eq!(r.bytes_in_flight, 6000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 1);
+        assert_eq!(r.bytes_in_flight(), 6000);
 
         // Pacing is not done during initial phase of connection.
         assert_eq!(r.get_packet_send_time(), now);
@@ -1201,8 +1241,8 @@ mod tests {
             "",
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 12000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 2);
+        assert_eq!(r.bytes_in_flight(), 12000);
 
         // Send the third packet out.
         let p = Sent {
@@ -1232,13 +1272,13 @@ mod tests {
             "",
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 3);
-        assert_eq!(r.bytes_in_flight, 13000);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 3);
+        assert_eq!(r.bytes_in_flight(), 13000);
 
         // We pace this outgoing packet. as all conditions for pacing
         // are passed.
         let pacing_rate = (r.cwnd() as f64 * PACING_MULTIPLIER / 0.05) as u64;
-        assert_eq!(r.congestion.pacer.rate(), pacing_rate);
+        assert_eq!(r.pacing_rate(), pacing_rate);
 
         assert_eq!(
             r.get_packet_send_time(),
@@ -1251,11 +1291,11 @@ mod tests {
         let mut cfg = crate::Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm(CongestionControlAlgorithm::Reno);
 
-        let mut r = LegacyRecovery::new(&cfg);
+        let mut r = Recovery::new(&cfg);
 
         let mut now = Instant::now();
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
 
         // Start by sending a few packets.
         let p = Sent {
@@ -1285,9 +1325,9 @@ mod tests {
             "",
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].in_flight_count, 1);
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 1);
-        assert_eq!(r.bytes_in_flight, 1000);
+        assert_eq!(r.in_flight_count(packet::Epoch::Application), 1);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 1);
+        assert_eq!(r.bytes_in_flight(), 1000);
 
         let p = Sent {
             pkt_num: 1,
@@ -1316,7 +1356,7 @@ mod tests {
             "",
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].in_flight_count, 2);
+        assert_eq!(r.in_flight_count(packet::Epoch::Application), 2);
 
         let p = Sent {
             pkt_num: 2,
@@ -1345,7 +1385,7 @@ mod tests {
             "",
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].in_flight_count, 3);
+        assert_eq!(r.in_flight_count(packet::Epoch::Application), 3);
 
         // Wait for 10ms.
         now += Duration::from_millis(10);
@@ -1367,32 +1407,35 @@ mod tests {
             (0, 0, 2 * 1000)
         );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.bytes_in_flight, 1000);
-        assert_eq!(r.congestion.lost_count, 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 2);
+        assert_eq!(r.bytes_in_flight(), 1000);
+        assert_eq!(r.lost_count(), 0);
 
         // Wait until loss detection timer expires.
         now = r.loss_detection_timer().unwrap();
 
         // Packet is declared lost.
         r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
-        assert_eq!(r.epochs[packet::Epoch::Application].loss_probes, 0);
+        assert_eq!(r.loss_probes(packet::Epoch::Application), 0);
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 2);
-        assert_eq!(r.epochs[packet::Epoch::Application].in_flight_count, 0);
-        assert_eq!(r.bytes_in_flight, 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 2);
+        assert_eq!(r.in_flight_count(packet::Epoch::Application), 0);
+        assert_eq!(r.bytes_in_flight(), 0);
         assert_eq!(r.cwnd(), 12000);
 
-        assert_eq!(r.congestion.lost_count, 0);
+        assert_eq!(r.lost_count(), 0);
 
         // Wait 1 RTT.
         now += r.rtt();
 
-        r.detect_lost_packets(packet::Epoch::Application, now, "");
+        assert_eq!(
+            r.detect_lost_packets_for_test(packet::Epoch::Application, now),
+            (0, 0)
+        );
 
-        assert_eq!(r.epochs[packet::Epoch::Application].sent_packets.len(), 0);
-        assert_eq!(r.epochs[packet::Epoch::Application].in_flight_count, 0);
-        assert_eq!(r.bytes_in_flight, 0);
-        assert_eq!(r.congestion.lost_count, 0);
+        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
+        assert_eq!(r.in_flight_count(packet::Epoch::Application), 0);
+        assert_eq!(r.bytes_in_flight(), 0);
+        assert_eq!(r.lost_count(), 0);
     }
 }
