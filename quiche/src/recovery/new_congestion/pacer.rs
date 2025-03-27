@@ -36,7 +36,7 @@ use crate::recovery::rtt::RttStats;
 
 use super::bandwidth::Bandwidth;
 use super::Congestion;
-use super::CongestionControl;
+use super::CongestionControlImpl;
 use super::Lost;
 use super::Acked;
 
@@ -113,7 +113,7 @@ impl Pacer {
     }
 }
 
-impl CongestionControl for Pacer {
+impl CongestionControlImpl for Pacer {
     fn get_congestion_window(&self) -> usize {
         self.sender.get_congestion_window()
     }

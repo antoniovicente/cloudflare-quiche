@@ -794,9 +794,7 @@ pub struct Config {
 
     grease: bool,
 
-    cc_algorithm: CongestionControlAlgorithm,
-
-    enable_gcongestion: bool,
+    cc: CongestionControl,
 
     initial_congestion_window_packets: usize,
 
@@ -869,8 +867,7 @@ impl Config {
             tls_ctx,
             application_protos: Vec::new(),
             grease: true,
-            cc_algorithm: CongestionControlAlgorithm::CUBIC,
-            enable_gcongestion: false,
+            cc: CongestionControl::cubic(),
             initial_congestion_window_packets:
                 DEFAULT_INITIAL_CONGESTION_WINDOW_PACKETS,
             pmtud: false,
@@ -1258,7 +1255,7 @@ impl Config {
     /// # Ok::<(), quiche::Error>(())
     /// ```
     pub fn set_cc_algorithm_name(&mut self, name: &str) -> Result<()> {
-        self.cc_algorithm = CongestionControlAlgorithm::from_str(name)?;
+        self.cc = CongestionControl::from_str(name)?;
 
         Ok(())
     }
@@ -1273,16 +1270,8 @@ impl Config {
     /// Sets the congestion control algorithm used.
     ///
     /// The default value is `CongestionControlAlgorithm::CUBIC`.
-    pub fn set_cc_algorithm(&mut self, algo: CongestionControlAlgorithm) {
-        self.cc_algorithm = algo;
-    }
-
-    /// Configures whether to enable the newer, experimental congestion control
-    /// implementation based on https://github.com/google/quiche
-    ///
-    /// The default value is `false`.
-    pub fn set_enable_gcongestion(&mut self, v: bool) {
-        self.enable_gcongestion = v;
+    pub fn set_cc_algorithm(&mut self, algorithm: CongestionControlAlgorithm) {
+        self.cc = CongestionControl::new(algorithm, false);
     }
 
     /// Configures whether to enable HyStart++.
@@ -17853,6 +17842,7 @@ pub use crate::path::PathStats;
 pub use crate::path::SocketAddrIter;
 
 pub use crate::recovery::CongestionControlAlgorithm;
+pub use crate::recovery::CongestionControl;
 use crate::recovery::RecoveryApi;
 
 pub use crate::stream::StreamIter;

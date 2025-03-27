@@ -97,7 +97,7 @@ impl Congestion {
 
             congestion_recovery_start_time: None,
 
-            cc_ops: recovery_config.cc_algorithm.into(),
+            cc_ops: recovery_config.cc.algorithm.into(),
 
             cubic_state: cubic::State::default(),
 

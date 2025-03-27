@@ -52,7 +52,7 @@ pub struct Acked {
     pub(super) size: usize,
 }
 
-#[enum_dispatch::enum_dispatch(CongestionControl)]
+#[enum_dispatch::enum_dispatch(CongestionControlImpl)]
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum Congestion {
@@ -86,7 +86,7 @@ impl Congestion {
 }
 
 #[enum_dispatch::enum_dispatch]
-pub(super) trait CongestionControl: Debug {
+pub(super) trait CongestionControlImpl: Debug {
     /// Returns the size of the current congestion window in bytes. Note, this
     /// is not the *available* window. Some send algorithms may not use a
     /// congestion window and will return 0.

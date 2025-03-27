@@ -156,7 +156,6 @@ fn make_quiche_config(
     config.set_initial_max_streams_uni(quic_settings.initial_max_streams_uni);
     config.set_disable_active_migration(quic_settings.disable_active_migration);
     config.set_cc_algorithm_name(quic_settings.cc_algorithm.as_str())?;
-    config.set_enable_gcongestion(quic_settings.enable_gcongestion);
     config.enable_hystart(quic_settings.enable_hystart);
     config.enable_pacing(quic_settings.enable_pacing);
 

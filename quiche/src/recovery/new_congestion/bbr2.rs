@@ -46,7 +46,7 @@ use self::mode::ModeImpl;
 use super::Acked;
 use super::bandwidth::Bandwidth;
 use super::bbr::SendTimeState;
-use super::CongestionControl;
+use super::CongestionControlImpl;
 use super::Lost;
 use super::RttStats;
 
@@ -440,7 +440,7 @@ impl BBRv2 {
     }
 }
 
-impl CongestionControl for BBRv2 {
+impl CongestionControlImpl for BBRv2 {
     fn get_congestion_window(&self) -> usize {
         self.cwnd
     }

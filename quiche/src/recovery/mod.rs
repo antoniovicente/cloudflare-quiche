@@ -104,8 +104,7 @@ impl std::fmt::Debug for LossDetectionTimer {
 pub struct RecoveryConfig {
     max_send_udp_payload_size: usize,
     pub max_ack_delay: Duration,
-    cc_algorithm: CongestionControlAlgorithm,
-    enable_gcongestion: bool,
+    cc: CongestionControl,
     hystart: bool,
     pacing: bool,
     max_pacing_rate: Option<u64>,
@@ -117,8 +116,7 @@ impl RecoveryConfig {
         Self {
             max_send_udp_payload_size: config.max_send_udp_payload_size,
             max_ack_delay: Duration::ZERO,
-            cc_algorithm: config.cc_algorithm,
-            enable_gcongestion: config.enable_gcongestion,
+            cc: config.cc,
             hystart: config.hystart,
             pacing: config.pacing,
             max_pacing_rate: config.max_pacing_rate,
@@ -247,7 +245,7 @@ pub trait RecoveryApi {
 
 impl Recovery {
     pub fn new_with_config(recovery_config: &RecoveryConfig) -> Self {
-        if recovery_config.enable_gcongestion {
+        if recovery_config.cc.use_gcongestion {
             Recovery::New(NewRecovery::new(recovery_config))
         } else {
             Recovery::Legacy(LegacyRecovery::new_with_config(recovery_config))
@@ -262,17 +260,53 @@ impl Recovery {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C)]
 pub enum CongestionControlAlgorithm {
-    /// Reno congestion control algorithm. `reno` in a string form.
+    /// Reno congestion control algorithm.
     Reno  = 0,
-    /// CUBIC congestion control algorithm (default). `cubic` in a string form.
+    /// CUBIC congestion control algorithm (default).
     CUBIC = 1,
-    /// BBR congestion control algorithm. `bbr` in a string form.
+    /// BBR congestion control algorithm.
     BBR   = 2,
-    /// BBRv2 congestion control algorithm. `bbr2` in a string form.
+    /// BBRv2 congestion control algorithm.
     BBR2  = 3,
 }
 
-impl FromStr for CongestionControlAlgorithm {
+/// Congestion control algorithms and implementation variant.
+///
+/// See from_str impl for a full list.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct CongestionControl {
+    algorithm: CongestionControlAlgorithm,
+    use_gcongestion: bool,
+}
+
+impl CongestionControl {
+    /// Create from CongestionControlAlgorithm and use_gcongestion parameter.
+    pub fn new(algorithm: CongestionControlAlgorithm, use_gcongestion: bool) -> Self {
+        Self {algorithm, use_gcongestion}
+    }
+
+    /// Reno congestion control algorithm. `reno` in a string form.
+    pub fn reno() -> Self {
+        Self{algorithm: CongestionControlAlgorithm::Reno, use_gcongestion: false}
+    }
+
+    /// CUBIC congestion control algorithm (default). `cubic` in a string form.
+    pub fn cubic() -> Self {
+        Self{algorithm: CongestionControlAlgorithm::CUBIC, use_gcongestion: false}
+    }
+
+    /// BBR congestion control algorithm. `bbr` in a string form.
+    pub fn bbr(use_gcongestion: bool) -> Self {
+        Self{algorithm: CongestionControlAlgorithm::BBR, use_gcongestion}
+    }
+
+    /// BBRv2 congestion control algorithm. `bbr2` in a string form.
+    pub fn bbr2(use_gcongestion: bool) -> Self {
+        Self{algorithm: CongestionControlAlgorithm::BBR2, use_gcongestion}
+    }
+}
+
+impl FromStr for CongestionControl {
     type Err = crate::Error;
 
     /// Converts a string to `CongestionControlAlgorithm`.
@@ -280,10 +314,12 @@ impl FromStr for CongestionControlAlgorithm {
     /// If `name` is not valid, `Error::CongestionControl` is returned.
     fn from_str(name: &str) -> std::result::Result<Self, Self::Err> {
         match name {
-            "reno" => Ok(CongestionControlAlgorithm::Reno),
-            "cubic" => Ok(CongestionControlAlgorithm::CUBIC),
-            "bbr" => Ok(CongestionControlAlgorithm::BBR),
-            "bbr2" => Ok(CongestionControlAlgorithm::BBR2),
+            "reno" => Ok(CongestionControl::reno()),
+            "cubic" => Ok(CongestionControl::cubic()),
+            "bbr" => Ok(CongestionControl::bbr(false)),
+            "bbr2" => Ok(CongestionControl::bbr2(false)),
+            "bbr_gcongestion" => Ok(CongestionControl::bbr(true)),
+            "bbr2_gcongestion" => Ok(CongestionControl::bbr2(true)),
 
             _ => Err(crate::Error::CongestionControl),
         }
@@ -559,14 +595,42 @@ mod tests {
 
     #[test]
     fn lookup_cc_algo_ok() {
-        let algo = CongestionControlAlgorithm::from_str("reno").unwrap();
-        assert_eq!(algo, CongestionControlAlgorithm::Reno);
+        let cc = CongestionControl::from_str("reno").unwrap();
+        assert_eq!(cc, CongestionControl::reno());
+        assert_eq!(cc.algorithm, CongestionControlAlgorithm::Reno);
+        assert_eq!(cc.use_gcongestion, false);
+
+        let cc = CongestionControl::from_str("cubic").unwrap();
+        assert_eq!(cc, CongestionControl::cubic());
+        assert_eq!(cc.algorithm, CongestionControlAlgorithm::CUBIC);
+        assert_eq!(cc.use_gcongestion, false);
+
+        let cc = CongestionControl::from_str("bbr").unwrap();
+        assert_eq!(cc, CongestionControl::bbr(false));
+        assert_eq!(cc.algorithm, CongestionControlAlgorithm::BBR);
+        assert_eq!(cc.use_gcongestion, false);
+
+        let cc = CongestionControl::from_str("bbr2").unwrap();
+        assert_eq!(cc, CongestionControl::bbr2(false));
+        assert_eq!(cc.algorithm, CongestionControlAlgorithm::BBR2);
+        assert_eq!(cc.use_gcongestion, false);
+
+
+        let cc = CongestionControl::from_str("bbr_gcongestion").unwrap();
+        assert_eq!(cc, CongestionControl::bbr(true));
+        assert_eq!(cc.algorithm, CongestionControlAlgorithm::BBR);
+        assert_eq!(cc.use_gcongestion, true);
+
+        let cc = CongestionControl::from_str("bbr2_gcongestion").unwrap();
+        assert_eq!(cc, CongestionControl::bbr2(true));
+        assert_eq!(cc.algorithm, CongestionControlAlgorithm::BBR2);
+        assert_eq!(cc.use_gcongestion, true);
     }
 
     #[test]
     fn lookup_cc_algo_bad() {
         assert_eq!(
-            CongestionControlAlgorithm::from_str("???"),
+            CongestionControl::from_str("???"),
             Err(crate::Error::CongestionControl)
         );
     }

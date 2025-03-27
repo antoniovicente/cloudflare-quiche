@@ -41,7 +41,7 @@ use self::windowed_filter::WindowedFilter;
 
 use super::Acked;
 use super::bandwidth::Bandwidth;
-use super::CongestionControl;
+use super::CongestionControlImpl;
 use super::Lost;
 use super::RttStats;
 
@@ -734,7 +734,7 @@ impl BBR {
     }
 }
 
-impl CongestionControl for BBR {
+impl CongestionControlImpl for BBR {
     fn get_congestion_window(&self) -> usize {
         if self.mode == Mode::ProbeRtt {
             return self.probe_rtt_congestion_window();

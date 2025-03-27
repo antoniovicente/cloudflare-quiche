@@ -129,12 +129,6 @@ pub struct QuicSettings {
     #[serde(default = "QuicSettings::default_cc_algorithm")]
     pub cc_algorithm: String,
 
-    /// Whether to enable the newer, experimental congestion control
-    /// implementation based on https://github.com/google/quiche
-    ///
-    /// The default value is `false`.
-    pub enable_gcongestion: bool,
-
     /// Whether to use HyStart++ (only with `cubic` and `reno` CC). Defaults to
     /// `true`.
     #[serde(default = "QuicSettings::default_enable_hystart")]

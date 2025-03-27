@@ -23,7 +23,7 @@ use crate::recovery::CongestionControlAlgorithm;
 use crate::recovery::rtt::RttStats;
 
 use super::Congestion;
-use super::CongestionControl;
+use super::CongestionControlImpl;
 use super::bandwidth::Bandwidth;
 use super::Acked;
 use super::Lost;
@@ -106,7 +106,7 @@ struct LossDetectionResult {
 impl RecoveryEpoch {
     /// Discard the Epoch state and return the total size of unacked packets
     /// that were discarded
-    fn discard(&mut self, cc: &mut impl CongestionControl) -> usize {
+    fn discard(&mut self, cc: &mut impl CongestionControlImpl) -> usize {
         let unacked_bytes = self
             .sent_packets
             .drain(..)
@@ -366,7 +366,7 @@ pub struct NewRecovery {
 
 impl NewRecovery {
     pub fn new(recovery_config: &RecoveryConfig) -> Self {
-        let cc = match recovery_config.cc_algorithm {
+        let cc = match recovery_config.cc.algorithm {
             CongestionControlAlgorithm::BBR => Congestion::bbr(
                 INITIAL_WINDOW_PACKETS,
                 MAX_WINDOW_PACKETS,
@@ -377,7 +377,7 @@ impl NewRecovery {
                 MAX_WINDOW_PACKETS,
                 recovery_config.max_send_udp_payload_size,
             ),
-            _ => panic!("Unknown cc algorithm {:?}", recovery_config.cc_algorithm),
+            _ => panic!("Unknown cc algorithm {:?}", recovery_config.cc.algorithm),
         };
 
         Self {
