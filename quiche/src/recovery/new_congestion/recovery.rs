@@ -832,7 +832,7 @@ impl RecoveryApi for NewRecovery {
     fn cwnd_available(&self) -> usize {
         // Ignore cwnd when sending probe packets.
         if self.epochs.iter().any(|e| e.loss_probes > 0) {
-            return std::usize::MAX;
+            return usize::MAX;
         }
 
         self.cwnd().saturating_sub(self.bytes_in_flight)
