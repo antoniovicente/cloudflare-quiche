@@ -246,9 +246,9 @@ pub trait RecoveryApi {
 impl Recovery {
     pub fn new_with_config(recovery_config: &RecoveryConfig) -> Self {
         if recovery_config.cc.use_gcongestion {
-            Recovery::New(NewRecovery::new(recovery_config))
+            Recovery::from(NewRecovery::new(recovery_config))
         } else {
-            Recovery::Legacy(LegacyRecovery::new_with_config(recovery_config))
+            Recovery::from(LegacyRecovery::new_with_config(recovery_config))
         }
     }
 }
