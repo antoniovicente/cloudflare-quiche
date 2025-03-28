@@ -361,7 +361,8 @@ where
                 break outcome;
             }
 
-            let max_send_size = if use_get_next_release_time {
+            #[cfg(not(feature = "gcongestion"))]
+            let max_send_size = if !use_get_next_release_time {
                 tune_max_send_size(
                     segment_size,
                     qconn.send_quantum(),
@@ -370,6 +371,9 @@ where
             } else {
                 usize::MAX
             };
+
+            #[cfg(feature = "gcongestion")]
+            let max_send_size = usize::MAX;
 
             // If segment_size is known, update the maximum of
             // GSO sender buffer size to the multiple of
