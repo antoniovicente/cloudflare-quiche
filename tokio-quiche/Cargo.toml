@@ -24,7 +24,7 @@ rpk = ["boring/rpk"]
 
 # Replaces quiche's original congestion control
 # implementation with one adapted from google/quiche.
-gcongestion = []
+gcongestion = ["quiche/gcongestion"]
 # Use quiche with zero-copy send calls.
 zero-copy = ["gcongestion"]
 
