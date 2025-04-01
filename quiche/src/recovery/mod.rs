@@ -292,11 +292,16 @@ impl FromStr for CongestionControlAlgorithm {
         match name {
             "reno" => Ok(CongestionControlAlgorithm::Reno),
             "cubic" => Ok(CongestionControlAlgorithm::CUBIC),
+            #[cfg(not(feature = "gcongestion"))]
             "bbr" => Ok(CongestionControlAlgorithm::BBR),
+            #[cfg(not(feature = "gcongestion"))]
             "bbr2" => Ok(CongestionControlAlgorithm::BBR2),
+            #[cfg(feature = "gcongestion")]
+            "bbr" => Ok(CongestionControlAlgorithm::BbrGcongestion),
+            #[cfg(feature = "gcongestion")]
+            "bbr2" => Ok(CongestionControlAlgorithm::Bbr2Gcongestion),
             "bbr_gcongestion" => Ok(CongestionControlAlgorithm::BbrGcongestion),
             "bbr2_gcongestion" => Ok(CongestionControlAlgorithm::Bbr2Gcongestion),
-
             _ => Err(crate::Error::CongestionControl),
         }
     }
@@ -587,12 +592,28 @@ mod tests {
         assert!(!recovery_for_alg(algo).use_get_next_release_time());
 
         let algo = CongestionControlAlgorithm::from_str("bbr").unwrap();
-        assert_eq!(algo, CongestionControlAlgorithm::BBR);
-        assert!(!recovery_for_alg(algo).use_get_next_release_time());
+        #[cfg(not(feature = "gcongestion"))]
+        {
+            assert_eq!(algo, CongestionControlAlgorithm::BBR);
+            assert!(!recovery_for_alg(algo).use_get_next_release_time());
+        }
+        #[cfg(feature = "gcongestion")]
+        {
+            assert_eq!(algo, CongestionControlAlgorithm::BbrGcongestion);
+            assert!(recovery_for_alg(algo).use_get_next_release_time());
+        }
 
         let algo = CongestionControlAlgorithm::from_str("bbr2").unwrap();
-        assert_eq!(algo, CongestionControlAlgorithm::BBR2);
-        assert!(!recovery_for_alg(algo).use_get_next_release_time());
+        #[cfg(not(feature = "gcongestion"))]
+        {
+            assert_eq!(algo, CongestionControlAlgorithm::BBR2);
+            assert!(!recovery_for_alg(algo).use_get_next_release_time());
+        }
+        #[cfg(feature = "gcongestion")]
+        {
+            assert_eq!(algo, CongestionControlAlgorithm::Bbr2Gcongestion);
+            assert!(recovery_for_alg(algo).use_get_next_release_time());
+        }
 
         let algo =
             CongestionControlAlgorithm::from_str("bbr_gcongestion").unwrap();
