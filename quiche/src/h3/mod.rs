@@ -934,7 +934,9 @@ pub struct Stats {
     pub qpack_decoder_stream_recv_bytes: u64,
 }
 
-fn close_conn_critical_stream<F: BufFactory>(conn: &mut super::Connection<F>) -> Result<()> {
+fn close_conn_critical_stream<F: BufFactory>(
+    conn: &mut super::Connection<F>,
+) -> Result<()> {
     conn.close(
         true,
         Error::ClosedCriticalStream.to_wire(),
@@ -1298,8 +1300,8 @@ impl Connection {
     /// [Section 4.1 of RFC 9114]:
     ///     https://www.rfc-editor.org/rfc/rfc9114.html#section-4.1.
     pub fn send_additional_headers<T: NameValue, F: BufFactory>(
-        &mut self, conn: &mut super::Connection<F>, stream_id: u64, headers: &[T],
-        is_trailer_section: bool, fin: bool,
+        &mut self, conn: &mut super::Connection<F>, stream_id: u64,
+        headers: &[T], is_trailer_section: bool, fin: bool,
     ) -> Result<()> {
         // Clients can only send trailer headers.
         if !self.is_server && !is_trailer_section {
