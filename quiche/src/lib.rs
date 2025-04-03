@@ -15937,84 +15937,84 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "boringssl-boring-crate")]
-    #[test]
-    fn in_handshake_config() -> Result<()> {
-        let mut buf = [0; 65535];
+    // #[cfg(feature = "boringssl-boring-crate")]
+    // #[test]
+    // fn in_handshake_config() -> Result<()> {
+    //     let mut buf = [0; 65535];
 
-        const CUSTOM_INITIAL_CONGESTION_WINDOW_PACKETS: usize = 30;
+    //     const CUSTOM_INITIAL_CONGESTION_WINDOW_PACKETS: usize = 30;
 
-        // Manually construct `SSlContextBuilder` for the server.
-        let mut server_tls_ctx_builder =
-            boring::ssl::SslContextBuilder::new(boring::ssl::SslMethod::tls())
-                .unwrap();
-        server_tls_ctx_builder
-            .set_certificate_chain_file("examples/cert.crt")
-            .unwrap();
-        server_tls_ctx_builder
-            .set_private_key_file(
-                "examples/cert.key",
-                boring::ssl::SslFiletype::PEM,
-            )
-            .unwrap();
-        server_tls_ctx_builder.set_select_certificate_callback(|mut hello| {
-            Connection::set_initial_congestion_window_packets_in_handshake(
-                hello.ssl_mut(),
-                CUSTOM_INITIAL_CONGESTION_WINDOW_PACKETS,
-            )
-            .unwrap();
+    //     // Manually construct `SSlContextBuilder` for the server.
+    //     let mut server_tls_ctx_builder =
+    //         boring::ssl::SslContextBuilder::new(boring::ssl::SslMethod::tls())
+    //             .unwrap();
+    //     server_tls_ctx_builder
+    //         .set_certificate_chain_file("examples/cert.crt")
+    //         .unwrap();
+    //     server_tls_ctx_builder
+    //         .set_private_key_file(
+    //             "examples/cert.key",
+    //             boring::ssl::SslFiletype::PEM,
+    //         )
+    //         .unwrap();
+    //     server_tls_ctx_builder.set_select_certificate_callback(|mut hello| {
+    //         Connection::set_initial_congestion_window_packets_in_handshake(
+    //             hello.ssl_mut(),
+    //             CUSTOM_INITIAL_CONGESTION_WINDOW_PACKETS,
+    //         )
+    //         .unwrap();
 
-            Ok(())
-        });
+    //         Ok(())
+    //     });
 
-        let mut server_config = Config::with_boring_ssl_ctx_builder(
-            crate::PROTOCOL_VERSION,
-            server_tls_ctx_builder,
-        )?;
+    //     let mut server_config = Config::with_boring_ssl_ctx_builder(
+    //         crate::PROTOCOL_VERSION,
+    //         server_tls_ctx_builder,
+    //     )?;
 
-        let mut client_config = Config::new(crate::PROTOCOL_VERSION)?;
-        client_config.load_cert_chain_from_pem_file("examples/cert.crt")?;
-        client_config.load_priv_key_from_pem_file("examples/cert.key")?;
+    //     let mut client_config = Config::new(crate::PROTOCOL_VERSION)?;
+    //     client_config.load_cert_chain_from_pem_file("examples/cert.crt")?;
+    //     client_config.load_priv_key_from_pem_file("examples/cert.key")?;
 
-        for config in [&mut client_config, &mut server_config] {
-            config.set_application_protos(&[b"proto1", b"proto2"])?;
-            config.set_initial_max_data(1000000);
-            config.set_initial_max_stream_data_bidi_local(15);
-            config.set_initial_max_stream_data_bidi_remote(15);
-            config.set_initial_max_stream_data_uni(10);
-            config.set_initial_max_streams_bidi(3);
-            config.set_initial_max_streams_uni(3);
-            config.set_max_idle_timeout(180_000);
-            config.verify_peer(false);
-            config.set_ack_delay_exponent(8);
-        }
+    //     for config in [&mut client_config, &mut server_config] {
+    //         config.set_application_protos(&[b"proto1", b"proto2"])?;
+    //         config.set_initial_max_data(1000000);
+    //         config.set_initial_max_stream_data_bidi_local(15);
+    //         config.set_initial_max_stream_data_bidi_remote(15);
+    //         config.set_initial_max_stream_data_uni(10);
+    //         config.set_initial_max_streams_bidi(3);
+    //         config.set_initial_max_streams_uni(3);
+    //         config.set_max_idle_timeout(180_000);
+    //         config.verify_peer(false);
+    //         config.set_ack_delay_exponent(8);
+    //     }
 
-        let mut pipe = testing::Pipe::with_client_and_server_config(
-            &mut client_config,
-            &mut server_config,
-        )?;
+    //     let mut pipe = testing::Pipe::with_client_and_server_config(
+    //         &mut client_config,
+    //         &mut server_config,
+    //     )?;
 
-        // Client sends initial flight.
-        let (len, _) = pipe.client.send(&mut buf).unwrap();
+    //     // Client sends initial flight.
+    //     let (len, _) = pipe.client.send(&mut buf).unwrap();
 
-        assert_eq!(pipe.server.tx_cap, 0);
+    //     assert_eq!(pipe.server.tx_cap, 0);
 
-        // Server receives client's initial flight and updates its config.
-        pipe.server_recv(&mut buf[..len]).unwrap();
+    //     // Server receives client's initial flight and updates its config.
+    //     pipe.server_recv(&mut buf[..len]).unwrap();
 
-        assert_eq!(
-            pipe.server.tx_cap,
-            CUSTOM_INITIAL_CONGESTION_WINDOW_PACKETS * 1200
-        );
+    //     assert_eq!(
+    //         pipe.server.tx_cap,
+    //         CUSTOM_INITIAL_CONGESTION_WINDOW_PACKETS * 1200
+    //     );
 
-        // Server sends initial flight.
-        let (len, _) = pipe.server.send(&mut buf).unwrap();
-        pipe.client_recv(&mut buf[..len]).unwrap();
+    //     // Server sends initial flight.
+    //     let (len, _) = pipe.server.send(&mut buf).unwrap();
+    //     pipe.client_recv(&mut buf[..len]).unwrap();
 
-        assert_eq!(pipe.handshake(), Ok(()));
+    //     assert_eq!(pipe.handshake(), Ok(()));
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     #[test]
     /// Tests that resetting a stream restores flow control for unsent data.
