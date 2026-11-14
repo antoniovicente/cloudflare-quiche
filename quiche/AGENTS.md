@@ -16,6 +16,7 @@ src/
     mod.rs                   Recovery enum, RecoveryOps trait (enum_dispatch)
     congestion/              Legacy CC (Cubic, Reno, Hystart++)
     gcongestion/             Google-derived CC (BBR2) — behind `gcongestion` feature
+    vcongestion/             BBRv3 from draft-ietf-ccwg-bbr-07 (`vbbr`)
   stream/                    Stream state machine, flow control per-stream
   tls/                       TLS backend abstraction (BoringSSL)
   crypto/                    Packet protection, key derivation
@@ -48,7 +49,7 @@ BoringSSL itself is built by `boring-sys` (no in-tree submodule).
 |------|-----------|
 | Connection lifecycle | `lib.rs` — `Connection` struct, `recv()`, `send()` |
 | HTTP/3 streams/headers | `h3/mod.rs` — `h3::Connection` |
-| Loss detection / CC | `recovery/mod.rs` → `congestion/` or `gcongestion/` |
+| Loss detection / CC | `recovery/mod.rs` → `congestion/`, `gcongestion/` or `vcongestion/` |
 | Packet parse/serialize | `packet.rs`, `frame.rs` |
 | TLS handshake | `tls/mod.rs` — cfg-gated per backend |
 | C bindings | `ffi.rs` + `include/quiche.h` |
@@ -69,7 +70,7 @@ BoringSSL itself is built by `boring-sys` (no in-tree submodule).
   combine independent flags into an enum; payload wildcards are fine.
 - **h3::Error != quiche::Error** — don't mix or convert carelessly; they have different variant sets.
 - **`Error::Done` is a success signal** in many read/write loops — not a failure.
-- **Don't add new CC impls** outside `recovery/` — two parallel impls (congestion + gcongestion) already exist.
+- **Don't add new CC impls** outside `recovery/` — three parallel impls (congestion, gcongestion, vcongestion) already exist.
 - **`unsafe` only at FFI boundaries** — `tls/`, `crypto/`, `ffi.rs`; don't add elsewhere.
 - **`#[cfg(feature = "fuzzing")]`** disables real crypto — never accidentally gate non-test code on it.
 
