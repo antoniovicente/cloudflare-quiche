@@ -22,6 +22,8 @@ use crate::frame;
 use crate::recovery::bytes_in_flight::BytesInFlight;
 use crate::recovery::gcongestion::Bandwidth;
 use crate::recovery::rtt::RttStats;
+use crate::recovery::CarefulResumeParams;
+use crate::recovery::CarefulResumeStats;
 use crate::recovery::CongestionControlAlgorithm;
 use crate::recovery::HandshakeStatus;
 use crate::recovery::LossDetectionTimer;
@@ -517,6 +519,10 @@ impl GRecovery {
                 recovery_config.max_send_udp_payload_size,
                 recovery_config.initial_rtt,
                 recovery_config.custom_bbr_params.as_ref(),
+                // Unvalidated packets must be paced (RFC 9959, Section 3.3).
+                recovery_config
+                    .careful_resume
+                    .filter(|_| recovery_config.pacing),
             ),
             _ => return None,
         };
@@ -1068,6 +1074,14 @@ impl RecoveryOps for GRecovery {
     /// Statistics from when a CCA first exited the startup phase.
     fn startup_exit(&self) -> Option<StartupExit> {
         self.recovery_stats.startup_exit
+    }
+
+    fn careful_resume_stats(&self) -> Option<CarefulResumeStats> {
+        self.pacer.careful_resume_stats()
+    }
+
+    fn careful_resume_observation(&self) -> Option<CarefulResumeParams> {
+        self.pacer.careful_resume_observation(&self.rtt_stats)
     }
 
     fn max_datagram_size(&self) -> usize {

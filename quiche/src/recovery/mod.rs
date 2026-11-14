@@ -44,6 +44,10 @@ use smallvec::SmallVec;
 
 use self::congestion::recovery::LegacyRecovery;
 use self::gcongestion::GRecovery;
+pub use careful_resume::CarefulResumeParams;
+pub use careful_resume::CarefulResumePhase;
+pub use careful_resume::CarefulResumeStats;
+pub use careful_resume::CarefulResumeTrigger;
 pub use gcongestion::BbrBwLoReductionStrategy;
 pub use gcongestion::BbrParams;
 #[cfg(feature = "internal")]
@@ -143,6 +147,9 @@ pub struct RecoveryConfig {
     pub unchecked_congestion_window: usize,
     pub enable_relaxed_loss_threshold: bool,
     pub enable_cubic_idle_restart_fix: bool,
+    /// Saved congestion control parameters used to resume the connection
+    /// with Careful Resume (RFC 9959).
+    pub careful_resume: Option<CarefulResumeParams>,
 }
 
 impl RecoveryConfig {
@@ -161,6 +168,7 @@ impl RecoveryConfig {
             unchecked_congestion_window: config.unchecked_congestion_window,
             enable_relaxed_loss_threshold: config.enable_relaxed_loss_threshold,
             enable_cubic_idle_restart_fix: config.enable_cubic_idle_restart_fix,
+            careful_resume: None,
         }
     }
 
@@ -268,6 +276,13 @@ pub trait RecoveryOps {
 
     /// Statistics from when a CCA first exited the startup phase.
     fn startup_exit(&self) -> Option<StartupExit>;
+
+    /// Careful Resume statistics, if Careful Resume is in use.
+    fn careful_resume_stats(&self) -> Option<CarefulResumeStats>;
+
+    /// Congestion control parameters that can be saved to resume future
+    /// connections with Careful Resume.
+    fn careful_resume_observation(&self) -> Option<CarefulResumeParams>;
 
     fn max_datagram_size(&self) -> usize;
 
@@ -3372,6 +3387,7 @@ mod tests {
 
 mod bandwidth;
 mod bytes_in_flight;
+mod careful_resume;
 mod congestion;
 mod gcongestion;
 mod rtt;

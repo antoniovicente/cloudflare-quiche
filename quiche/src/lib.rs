@@ -9756,6 +9756,10 @@ pub use crate::recovery::BbrBwLoReductionStrategy;
 pub use crate::recovery::BbrParams;
 #[cfg(feature = "internal")]
 pub use crate::recovery::BbrRttJumpDetector;
+pub use crate::recovery::CarefulResumeParams;
+pub use crate::recovery::CarefulResumePhase;
+pub use crate::recovery::CarefulResumeStats;
+pub use crate::recovery::CarefulResumeTrigger;
 pub use crate::recovery::CongestionControlAlgorithm;
 pub use crate::recovery::StartupExit;
 pub use crate::recovery::StartupExitReason;

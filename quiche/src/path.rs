@@ -36,6 +36,8 @@ use smallvec::SmallVec;
 
 use slab::Slab;
 
+use crate::CarefulResumeParams;
+use crate::CarefulResumeStats;
 use crate::Config;
 use crate::Error;
 use crate::Result;
@@ -609,6 +611,10 @@ impl Path {
                 .map(Bandwidth::to_bytes_per_second),
             rtt_persistent_jump_count: self.recovery.rtt_persistent_jump_count(),
             startup_exit: self.recovery.startup_exit(),
+            careful_resume: self.recovery.careful_resume_stats(),
+            careful_resume_observation: self
+                .recovery
+                .careful_resume_observation(),
         }
     }
 
@@ -1082,6 +1088,31 @@ pub struct PathStats {
 
     /// Statistics from when a CCA first exited the startup phase.
     pub startup_exit: Option<StartupExit>,
+
+    /// Careful Resume ([RFC 9959]) statistics, if the path was resumed using
+    /// saved congestion control parameters.
+    ///
+    /// [RFC 9959]: https://www.rfc-editor.org/rfc/rfc9959.html
+    pub careful_resume: Option<CarefulResumeStats>,
+
+    /// Congestion control parameters observed on the path, which can be saved
+    /// and used to resume a future connection to the same remote endpoint with
+    /// Careful Resume ([RFC 9959]).
+    ///
+    /// This is `None` if the current state is not suitable to be saved, e.g.
+    /// because no representative bandwidth estimate is available yet, the
+    /// observed capacity is too small to benefit from Careful Resume, Careful
+    /// Resume is currently validating a resumed rate, or saved parameters
+    /// were found to be invalid on this path. It is currently only provided by
+    /// the [`Bbr2Gcongestion`] congestion control algorithm.
+    ///
+    /// Applications might want to discount observations from connections that
+    /// were application limited when a previous observation recorded a
+    /// higher value (RFC 9959, Section 4.1).
+    ///
+    /// [RFC 9959]: https://www.rfc-editor.org/rfc/rfc9959.html
+    /// [`Bbr2Gcongestion`]: enum.CongestionControlAlgorithm.html#variant.Bbr2Gcongestion
+    pub careful_resume_observation: Option<CarefulResumeParams>,
 }
 
 impl std::fmt::Debug for PathStats {

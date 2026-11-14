@@ -34,6 +34,8 @@ use crate::recovery::gcongestion::bbr2::BBRv2;
 use crate::recovery::gcongestion::Bandwidth;
 use crate::recovery::gcongestion::CongestionControl;
 use crate::recovery::rtt::RttStats;
+use crate::recovery::CarefulResumeParams;
+use crate::recovery::CarefulResumeStats;
 use crate::recovery::RecoveryStats;
 use crate::recovery::ReleaseDecision;
 use crate::recovery::ReleaseTime;
@@ -259,6 +261,16 @@ impl Pacer {
 
     pub fn rtt_persistent_jump_count(&self) -> u64 {
         self.sender.rtt_persistent_jump_count()
+    }
+
+    pub fn careful_resume_stats(&self) -> Option<CarefulResumeStats> {
+        self.sender.careful_resume_stats()
+    }
+
+    pub fn careful_resume_observation(
+        &self, rtt_stats: &RttStats,
+    ) -> Option<CarefulResumeParams> {
+        self.sender.careful_resume_observation(rtt_stats)
     }
 
     #[cfg(feature = "qlog")]

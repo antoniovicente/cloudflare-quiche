@@ -195,6 +195,10 @@ pub(super) struct BBRv2NetworkModel {
 
     /// Detector for persistent RTT jump episodes.
     rtt_jump_detector: RttJumpDetector,
+
+    /// Whether bandwidth samples must be discarded, e.g. because they are
+    /// tainted by Careful Resume's Safe Retreat (RFC 9959, Appendix C.3).
+    discard_bandwidth_samples: bool,
 }
 
 impl BBRv2NetworkModel {
@@ -244,6 +248,8 @@ impl BBRv2NetworkModel {
             latest_ack_rate: None,
 
             rtt_jump_detector: RttJumpDetector::new(params.rtt_jump_detector),
+
+            discard_bandwidth_samples: false,
         }
     }
 
@@ -332,7 +338,7 @@ impl BBRv2NetworkModel {
                 false
             };
 
-        let sample = self.bandwidth_sampler.on_congestion_event(
+        let mut sample = self.bandwidth_sampler.on_congestion_event(
             event_time,
             acked_packets,
             lost_packets,
@@ -340,6 +346,10 @@ impl BBRv2NetworkModel {
             self.bandwidth_lo.unwrap_or(Bandwidth::infinite()),
             self.round_trip_count(),
         );
+
+        if self.discard_bandwidth_samples {
+            sample.sample_max_bandwidth = None;
+        }
 
         if sample.extra_acked == 0 {
             self.cwnd_limited_before_aggregation_epoch = congestion_event
@@ -820,6 +830,10 @@ impl BBRv2NetworkModel {
 
     pub(super) fn rounds_with_queueing(&self) -> usize {
         self.rounds_with_queueing
+    }
+
+    pub(super) fn set_discard_bandwidth_samples(&mut self, discard: bool) {
+        self.discard_bandwidth_samples = discard;
     }
 }
 

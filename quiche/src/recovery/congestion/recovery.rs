@@ -37,6 +37,8 @@ use super::Sent;
 use crate::packet::Epoch;
 use crate::ranges::RangeSet;
 use crate::recovery::Bandwidth;
+use crate::recovery::CarefulResumeParams;
+use crate::recovery::CarefulResumeStats;
 use crate::recovery::HandshakeStatus;
 use crate::recovery::OnLossDetectionTimeoutOutcome;
 use crate::recovery::RecoveryOps;
@@ -1003,6 +1005,17 @@ impl RecoveryOps for LegacyRecovery {
         &mut self, epoch: Epoch, now: Instant,
     ) -> (usize, usize) {
         self.detect_lost_packets(epoch, now, "")
+    }
+
+    // FIXME only used by gcongestion
+    fn careful_resume_stats(&self) -> Option<CarefulResumeStats> {
+        // Careful Resume requires pacing, which is not implemented here.
+        None
+    }
+
+    // FIXME only used by gcongestion
+    fn careful_resume_observation(&self) -> Option<CarefulResumeParams> {
+        None
     }
 
     // FIXME only used by gcongestion

@@ -28,6 +28,7 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+mod careful_resume;
 mod drain;
 mod mode;
 mod network_model;
@@ -41,9 +42,17 @@ use std::time::Instant;
 
 use network_model::BBRv2NetworkModel;
 
+use crate::recovery::careful_resume::CarefulResumeParams;
+use crate::recovery::careful_resume::CarefulResumeStats;
 use crate::recovery::gcongestion::Bandwidth;
 use crate::recovery::RecoveryStats;
+use crate::recovery::StartupExit;
+use crate::recovery::StartupExitReason;
 
+use self::careful_resume::Action as CarefulResumeAction;
+use self::careful_resume::CarefulResume;
+use self::careful_resume::CongestionContext as CarefulResumeContext;
+use self::careful_resume::CongestionEventInfo as CarefulResumeEventInfo;
 use self::mode::Mode;
 use self::mode::ModeImpl;
 
@@ -459,6 +468,10 @@ pub(crate) struct BBRv2 {
     has_non_app_limited_sample: bool,
     last_quiescence_start: Option<Instant>,
     params: Params,
+
+    /// Careful Resume (RFC 9959) state, if the connection is resumed using
+    /// saved congestion control parameters.
+    careful_resume: Option<CarefulResume>,
 }
 
 struct BBRv2CongestionEvent {
@@ -522,6 +535,7 @@ impl BBRv2 {
         initial_congestion_window: usize, max_congestion_window: usize,
         max_segment_size: usize, smoothed_rtt: Duration,
         custom_bbr_params: Option<&BbrParams>,
+        careful_resume: Option<CarefulResumeParams>,
     ) -> Self {
         let cwnd = initial_congestion_window * max_segment_size;
 
@@ -549,6 +563,7 @@ impl BBRv2 {
             last_quiescence_start: None,
             mss: max_segment_size,
             params,
+            careful_resume: careful_resume.and_then(CarefulResume::new),
         }
     }
 
@@ -668,6 +683,96 @@ impl BBRv2 {
     pub(crate) fn rtt_persistent_jump_count(&self) -> u64 {
         self.mode.network_model().rtt_persistent_jump_count()
     }
+
+    /// Careful Resume statistics, if Careful Resume is in use.
+    pub(crate) fn careful_resume_stats(&self) -> Option<CarefulResumeStats> {
+        self.careful_resume.as_ref().map(CarefulResume::stats)
+    }
+
+    /// Congestion control parameters that can be saved to resume future
+    /// connections, if the current state is suitable for being saved.
+    pub(crate) fn careful_resume_observation(
+        &self, rtt_stats: &RttStats,
+    ) -> Option<CarefulResumeParams> {
+        if let Some(cr) = &self.careful_resume {
+            if !cr.allows_observation() {
+                return None;
+            }
+        }
+
+        // Only bandwidth samples that were not application limited are
+        // representative of the path capacity.
+        if !self.has_non_app_limited_sample {
+            return None;
+        }
+
+        careful_resume::observation(
+            self.mode.network_model().max_bandwidth(),
+            rtt_stats.min_rtt(),
+            self.initial_cwnd,
+        )
+    }
+
+    fn careful_resume_context(&self) -> CarefulResumeContext {
+        CarefulResumeContext {
+            cwnd: self.cwnd,
+            initial_cwnd: self.initial_cwnd,
+            min_cwnd: self.cwnd_limits.lo,
+            max_cwnd: self.cwnd_limits.hi,
+            startup_cwnd_gain: self.params.startup_cwnd_gain,
+            in_startup: matches!(self.mode, Mode::Startup(_)),
+            in_drain: matches!(self.mode, Mode::Drain(_)),
+        }
+    }
+
+    fn apply_careful_resume_action(
+        &mut self, action: CarefulResumeAction,
+        recovery_stats: Option<&mut RecoveryStats>,
+    ) {
+        match action {
+            CarefulResumeAction::None => (),
+
+            CarefulResumeAction::SetCwnd(cwnd) => {
+                self.cwnd = self.cwnd_limits.apply_limits(cwnd);
+            },
+
+            CarefulResumeAction::ResetCwnd(cwnd) => {
+                self.cwnd = self.cwnd_limits.apply_limits(cwnd);
+
+                // Drop the resumed pacing rate in favour of the nominal rate.
+                let network_model = self.mode.network_model();
+                let nominal_rate = network_model.bandwidth_estimate() *
+                    network_model.pacing_gain();
+                let cwnd_rate = Bandwidth::from_bytes_and_time_delta(
+                    self.cwnd,
+                    network_model.min_rtt(),
+                );
+
+                self.pacing_rate = nominal_rate.max(cwnd_rate);
+            },
+
+            CarefulResumeAction::ExitStartup => {
+                if matches!(self.mode, Mode::Startup(_)) {
+                    if let Some(recovery_stats) = recovery_stats {
+                        recovery_stats.set_startup_exit(StartupExit::new(
+                            self.cwnd,
+                            Some(self.mode.network_model().max_bandwidth()),
+                            StartupExitReason::Loss,
+                        ));
+                    }
+                }
+
+                // Startup transitions to Drain when full bandwidth is reached.
+                self.mode.network_model_mut().set_full_bandwidth_reached();
+            },
+
+            CarefulResumeAction::LimitInflightHi(inflight_hi) => {
+                let network_model = self.mode.network_model_mut();
+                let inflight_hi = network_model.inflight_hi().min(inflight_hi);
+                network_model.set_inflight_hi(inflight_hi);
+            },
+        }
+    }
 }
 
 impl CongestionControl for BBRv2 {
@@ -704,12 +809,23 @@ impl CongestionControl for BBRv2 {
             bytes,
             is_retransmissible,
         );
+
+        if let Some(cr) = &mut self.careful_resume {
+            let action = cr.on_packet_sent(
+                packet_number,
+                bytes_in_flight + bytes,
+                self.cwnd,
+                self.mss,
+                self.initial_cwnd,
+            );
+            self.apply_careful_resume_action(action, None);
+        }
     }
 
     fn on_congestion_event(
         &mut self, _rtt_updated: bool, prior_in_flight: usize,
-        _bytes_in_flight: usize, event_time: Instant, acked_packets: &[Acked],
-        lost_packets: &[Lost], least_unacked: u64, _rtt_stats: &RttStats,
+        bytes_in_flight: usize, event_time: Instant, acked_packets: &[Acked],
+        lost_packets: &[Lost], least_unacked: u64, rtt_stats: &RttStats,
         recovery_stats: &mut RecoveryStats,
     ) {
         let mut congestion_event = BBRv2CongestionEvent::new(
@@ -726,6 +842,27 @@ impl CongestionControl for BBRv2 {
             &mut congestion_event,
             &self.params,
         );
+
+        if self.careful_resume.is_some() {
+            let send_state = &congestion_event.last_packet_send_state;
+            let info = CarefulResumeEventInfo {
+                now: event_time,
+                largest_acked: acked_packets.last().map(|a| a.pkt_num),
+                bytes_acked: congestion_event.bytes_acked,
+                bytes_lost: congestion_event.bytes_lost,
+                bytes_in_flight,
+                end_of_round_trip: congestion_event.end_of_round_trip,
+                is_app_limited: !send_state.is_valid || send_state.is_app_limited,
+                min_rtt: rtt_stats.min_rtt(),
+                smoothed_rtt: rtt_stats.rtt(),
+            };
+            let ctx = self.careful_resume_context();
+
+            if let Some(cr) = &mut self.careful_resume {
+                let action = cr.on_congestion_event(&info, &ctx);
+                self.apply_careful_resume_action(action, Some(recovery_stats));
+            }
+        }
 
         // Number of mode changes allowed for this congestion event.
         let mut mode_changes_allowed = MAX_MODE_CHANGES_PER_CONGESTION_EVENT;
@@ -745,9 +882,38 @@ impl CongestionControl for BBRv2 {
             mode_changes_allowed -= 1;
         }
 
+        if self.careful_resume.is_some() {
+            let ctx = self.careful_resume_context();
+
+            if let Some(cr) = &mut self.careful_resume {
+                let action = cr.on_mode_updated(&ctx);
+                self.apply_careful_resume_action(action, Some(recovery_stats));
+            }
+        }
+
         self.update_pacing_rate(congestion_event.bytes_acked);
 
         self.update_congestion_window(congestion_event.bytes_acked);
+
+        if self.careful_resume.is_some() {
+            let ctx = self.careful_resume_context();
+            let bandwidth_estimate =
+                self.mode.network_model().bandwidth_estimate();
+
+            if let Some(cr) = &mut self.careful_resume {
+                cr.adjust(
+                    &mut self.cwnd,
+                    &mut self.pacing_rate,
+                    bandwidth_estimate,
+                    &ctx,
+                );
+
+                let discard = cr.discards_bandwidth_samples(ctx.in_drain);
+                self.mode
+                    .network_model_mut()
+                    .set_discard_bandwidth_samples(discard);
+            }
+        }
 
         let network_model = self.mode.network_model_mut();
         network_model
@@ -856,6 +1022,7 @@ mod tests {
             INIT_PACKET_SIZE,
             initial_rtt,
             Some(bbr_params),
+            None,
         );
 
         assert_eq!(bbr2.cwnd_limits.lo, INIT_CWND);
@@ -901,6 +1068,7 @@ mod tests {
             INIT_PACKET_SIZE,
             initial_rtt,
             Some(bbr_params),
+            None,
         );
 
         // If not set, the initial congestion window is the lower bound.
