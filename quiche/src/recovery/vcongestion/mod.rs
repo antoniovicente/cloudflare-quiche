@@ -31,6 +31,8 @@
 //! QUIC loss detection as specified in RFC 9002:
 //!
 //! * `delivery_rate`: delivery rate sampling (draft Section 4.1).
+//! * `pacer`: pacing with a send quantum (draft Sections 5.6.2 and 5.6.3, RFC
+//!   9002 Section 7.7).
 //! * `windowed_filter`: windowed max filters (draft Sections 5.5.5 and 5.5.9).
 //!
 //! References:
@@ -42,4 +44,5 @@
 #![allow(dead_code)]
 
 mod delivery_rate;
+mod pacer;
 mod windowed_filter;
