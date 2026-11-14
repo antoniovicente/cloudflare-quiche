@@ -40,6 +40,7 @@ use crate::metrics::Metrics;
 use crate::quic::connection::CidOwned;
 use crate::quic::connection::IncomingPacketReceiver;
 use crate::quic::connection::SharedConnectionIdGenerator;
+use crate::quic::hooks::apply_careful_resume_params;
 use crate::quic::DscpHandle;
 use crate::settings::Config;
 use datagram_socket::DatagramSocketRecv;
@@ -366,6 +367,14 @@ where
         let handshake_info = HandshakeInfo::new(
             handshake_start_time,
             self.config.handshake_timeout,
+        );
+
+        let mut conn = conn;
+        apply_careful_resume_params(
+            self.config.connection_hook.as_deref(),
+            &mut conn,
+            local_addr,
+            peer_addr,
         );
 
         let conn = InitialQuicConnection::new(QuicConnectionParams {

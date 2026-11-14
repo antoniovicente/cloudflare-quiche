@@ -50,6 +50,7 @@ use crate::quic::connection::Incoming;
 use crate::quic::connection::IncomingPacketReceiver;
 use crate::quic::connection::QuicConnectionStats;
 use crate::quic::connection::SharedConnectionIdGenerator;
+use crate::quic::hooks::save_careful_resume_params;
 use crate::quic::hooks::ConnectionHook;
 use crate::quic::DscpHandle;
 use crate::quic::QuicheConnection;
@@ -1306,6 +1307,8 @@ where
         self.flush_buffer_to_socket(send_buf.as_ref()).await;
 
         *ctx.stats.lock().unwrap() = QuicConnectionStats::from_conn(qconn);
+
+        save_careful_resume_params(ctx.connection_hook.as_deref(), qconn);
 
         if let Some(err) = qconn.peer_error() {
             if err.is_app {

@@ -113,6 +113,7 @@ mod router;
 use self::connection::ApplicationOverQuic;
 use self::connection::ConnectionIdGenerator as _;
 use self::connection::QuicConnection;
+use self::hooks::apply_careful_resume_params;
 use self::router::acceptor::ConnectionAcceptor;
 use self::router::acceptor::ConnectionAcceptorConfig;
 use self::router::connector::ClientConnector;
@@ -230,6 +231,13 @@ where
             quiche::Error::CryptoFail
         })?;
     }
+
+    apply_careful_resume_params(
+        params.hooks.connection_hook.as_deref(),
+        &mut quiche_conn,
+        socket.local_addr,
+        socket.peer_addr,
+    );
 
     // Set the qlog writer here instead of in the `ClientConnector` to avoid
     // missing logs from early in the connection
