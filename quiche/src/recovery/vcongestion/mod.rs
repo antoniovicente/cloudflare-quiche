@@ -30,6 +30,7 @@
 //! Congestion Control" (selected with the `vbbr` algorithm name), on top of
 //! QUIC loss detection as specified in RFC 9002:
 //!
+//! * `delivery_rate`: delivery rate sampling (draft Section 4.1).
 //! * `windowed_filter`: windowed max filters (draft Sections 5.5.5 and 5.5.9).
 //!
 //! References:
@@ -40,4 +41,5 @@
 // The module isn't used by `Recovery` until `VRecovery` is added.
 #![allow(dead_code)]
 
+mod delivery_rate;
 mod windowed_filter;
