@@ -49,10 +49,13 @@ use std::time::Duration;
 /// saved and used to resume a subsequent connection to the same remote
 /// endpoint with Careful Resume ([RFC 9959]).
 ///
-/// An observation is obtained from [`PathStats::careful_resume_observation`].
+/// An observation is obtained from [`PathStats::careful_resume_observation`]
+/// and is applied to a new connection with
+/// [`Connection::set_careful_resume_params()`].
 ///
 /// [RFC 9959]: https://www.rfc-editor.org/rfc/rfc9959.html
 /// [`PathStats::careful_resume_observation`]: crate::PathStats::careful_resume_observation
+/// [`Connection::set_careful_resume_params()`]: crate::Connection::set_careful_resume_params
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CarefulResumeParams {
     /// The observed bottleneck bandwidth in bytes per second (the
@@ -284,6 +287,23 @@ mod tests {
         }
 
         now
+    }
+
+    #[test]
+    fn not_used_on_new_paths() {
+        let cfg = Config::new(crate::PROTOCOL_VERSION).unwrap();
+        let mut recovery_config = RecoveryConfig::from_config(&cfg);
+        recovery_config.careful_resume = Some(SAVED);
+
+        let new_path_config = recovery_config.for_new_path();
+        assert_eq!(new_path_config.careful_resume, None);
+        assert!(
+            new_path_config ==
+                RecoveryConfig {
+                    careful_resume: None,
+                    ..recovery_config
+                }
+        );
     }
 
     #[test]

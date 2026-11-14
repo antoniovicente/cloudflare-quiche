@@ -2495,6 +2495,60 @@ impl<F: BufFactory> Connection<F> {
         Ok(())
     }
 
+    /// Configures saved congestion control parameters to resume the
+    /// connection with Careful Resume ([RFC 9959]).
+    ///
+    /// The parameters should have been obtained from
+    /// [`PathStats::careful_resume_observation`] on a previous connection
+    /// between the same endpoints. Careful Resume first confirms that the
+    /// current path is consistent with the saved parameters, then tentatively
+    /// increases the sending rate to (at most) half the saved rate, validates
+    /// it, and safely retreats if congestion is detected.
+    ///
+    /// The application is responsible for managing the saved parameters:
+    ///
+    /// * they must only be used for a connection to the same remote endpoint
+    ///   (e.g. same local and peer address) they were observed on;
+    /// * they must not be used after a configured lifetime (RFC 9959, Section
+    ///   4.3.1);
+    /// * a given set of saved parameters must only be used by one connection at
+    ///   a time (RFC 9959, Section 4.2);
+    /// * they must be deleted if [`CarefulResumeStats::safe_retreat_entered`]
+    ///   is set (RFC 9959, Section 3.5).
+    ///
+    /// Careful Resume only applies to the initial path, and is currently only
+    /// supported by the [`Bbr2Gcongestion`] congestion control algorithm with
+    /// pacing enabled. It is ignored otherwise, in which case
+    /// [`PathStats::careful_resume`] is `None`.
+    ///
+    /// This must only be called before any ack-eliciting packet is sent,
+    /// otherwise [`InvalidState`] is returned. It should be called after any
+    /// handshake callback that changes the congestion control configuration
+    /// (e.g. [`set_cc_algorithm_in_handshake()`]) has been registered, since
+    /// the parameters are preserved across such changes.
+    ///
+    /// [RFC 9959]: https://www.rfc-editor.org/rfc/rfc9959.html
+    /// [`PathStats::careful_resume_observation`]: struct.PathStats.html#structfield.careful_resume_observation
+    /// [`PathStats::careful_resume`]: struct.PathStats.html#structfield.careful_resume
+    /// [`CarefulResumeStats::safe_retreat_entered`]: struct.CarefulResumeStats.html#structfield.safe_retreat_entered
+    /// [`Bbr2Gcongestion`]: enum.CongestionControlAlgorithm.html#variant.Bbr2Gcongestion
+    /// [`InvalidState`]: enum.Error.html#variant.InvalidState
+    /// [`set_cc_algorithm_in_handshake()`]: struct.Connection.html#method.set_cc_algorithm_in_handshake
+    pub fn set_careful_resume_params(
+        &mut self, params: CarefulResumeParams,
+    ) -> Result<()> {
+        let path = self.paths.get_active_mut()?;
+
+        if !path.can_reinit_recovery() {
+            return Err(Error::InvalidState);
+        }
+
+        self.recovery_config.careful_resume = Some(params);
+        path.reinit_recovery(&self.recovery_config);
+
+        Ok(())
+    }
+
     /// Sets the `max_idle_timeout` transport parameter, in milliseconds.
     ///
     /// This must only be called immediately after creating a connection, that
@@ -9295,7 +9349,7 @@ impl<F: BufFactory> Connection<F> {
         let mut path = path::Path::new(
             info.to,
             info.from,
-            &self.recovery_config,
+            &self.recovery_config.for_new_path(),
             self.path_challenge_recv_max_queue_len,
             false,
             None,
@@ -9447,7 +9501,7 @@ impl<F: BufFactory> Connection<F> {
         let mut path = path::Path::new(
             local_addr,
             peer_addr,
-            &self.recovery_config,
+            &self.recovery_config.for_new_path(),
             self.path_challenge_recv_max_queue_len,
             false,
             None,

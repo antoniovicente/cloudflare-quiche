@@ -172,6 +172,16 @@ impl RecoveryConfig {
         }
     }
 
+    /// Returns the configuration for paths created after the initial one.
+    pub(crate) fn for_new_path(&self) -> Self {
+        // Saved congestion control parameters must not be used on a different
+        // path (RFC 9959, Section 3.2).
+        Self {
+            careful_resume: None,
+            ..*self
+        }
+    }
+
     pub(crate) fn update_max_send_udp_payload_size(&mut self, peer_max: usize) {
         // Max payload size can never grow, only shrink in response to peer
         // transport parameters. It must also never fall below 1200 bytes per

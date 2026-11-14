@@ -14678,3 +14678,91 @@ fn server_qlog() {
         panic!("expected Qlog event");
     }
 }
+
+#[rstest]
+fn careful_resume_params(
+    #[values("cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+) {
+    let saved = CarefulResumeParams {
+        bandwidth: 12_000_000,
+        min_rtt: Duration::from_millis(100),
+    };
+
+    let mut config = test_utils::Pipe::default_config(cc_algorithm_name).unwrap();
+    config.set_initial_max_data(10_000_000);
+    config.set_initial_max_stream_data_bidi_local(10_000_000);
+    config.set_initial_max_stream_data_bidi_remote(10_000_000);
+
+    let mut pipe = test_utils::Pipe::with_config(&mut config).unwrap();
+
+    assert_eq!(pipe.server.set_careful_resume_params(saved), Ok(()));
+
+    let expected =
+        (cc_algorithm_name == "bbr2_gcongestion").then_some(CarefulResumeStats {
+            phase: CarefulResumePhase::Reconnaissance,
+            trigger: None,
+            safe_retreat_entered: false,
+        });
+
+    let server_stats = pipe.server.path_stats().next().unwrap();
+    assert_eq!(server_stats.careful_resume, expected);
+    assert_eq!(server_stats.careful_resume_observation, None);
+
+    let client_stats = pipe.client.path_stats().next().unwrap();
+    assert_eq!(client_stats.careful_resume, None);
+
+    assert_eq!(pipe.handshake(), Ok(()));
+
+    // The parameters can't be set after in-flight data was sent.
+    assert_eq!(
+        pipe.server.set_careful_resume_params(saved),
+        Err(Error::InvalidState)
+    );
+
+    // Transfer some data. The in-memory pipe RTT is much smaller than the
+    // saved RTT, so the saved parameters are not used.
+    assert_eq!(pipe.client.stream_send(0, b"GET /", true), Ok(5));
+    assert_eq!(pipe.advance(), Ok(()));
+
+    let data = vec![0; 1_000_000];
+    let mut sent = 0;
+    let mut recv = 0;
+    let mut buf = vec![0; 65535];
+
+    while recv < data.len() {
+        if sent < data.len() {
+            sent += pipe.server.stream_send(0, &data[sent..], true).unwrap_or(0);
+        }
+
+        assert_eq!(pipe.advance(), Ok(()));
+
+        while let Ok((len, _)) = pipe.client.stream_recv(0, &mut buf) {
+            recv += len;
+        }
+    }
+
+    let server_stats = pipe.server.path_stats().next().unwrap();
+
+    if cc_algorithm_name == "bbr2_gcongestion" {
+        assert_eq!(
+            server_stats.careful_resume,
+            Some(CarefulResumeStats {
+                phase: CarefulResumePhase::Normal,
+                trigger: Some(CarefulResumeTrigger::RttNotValidated),
+                safe_retreat_entered: false,
+            })
+        );
+
+        // The observation reflects the path's bandwidth and minimum RTT, as
+        // long as the capacity is at least 4 initial windows.
+        let params = CarefulResumeParams {
+            bandwidth: server_stats.max_bandwidth.unwrap(),
+            min_rtt: server_stats.min_rtt.unwrap(),
+        };
+        let expected = (params.saved_cwnd() >= 4 * 10 * 1200).then_some(params);
+        assert_eq!(server_stats.careful_resume_observation, expected);
+    } else {
+        assert_eq!(server_stats.careful_resume, None);
+        assert_eq!(server_stats.careful_resume_observation, None);
+    }
+}

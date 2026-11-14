@@ -1090,14 +1090,15 @@ pub struct PathStats {
     pub startup_exit: Option<StartupExit>,
 
     /// Careful Resume ([RFC 9959]) statistics, if the path was resumed using
-    /// saved congestion control parameters.
+    /// [`set_careful_resume_params()`].
     ///
     /// [RFC 9959]: https://www.rfc-editor.org/rfc/rfc9959.html
+    /// [`set_careful_resume_params()`]: struct.Connection.html#method.set_careful_resume_params
     pub careful_resume: Option<CarefulResumeStats>,
 
     /// Congestion control parameters observed on the path, which can be saved
     /// and used to resume a future connection to the same remote endpoint with
-    /// Careful Resume ([RFC 9959]).
+    /// [`set_careful_resume_params()`].
     ///
     /// This is `None` if the current state is not suitable to be saved, e.g.
     /// because no representative bandwidth estimate is available yet, the
@@ -1110,7 +1111,7 @@ pub struct PathStats {
     /// were application limited when a previous observation recorded a
     /// higher value (RFC 9959, Section 4.1).
     ///
-    /// [RFC 9959]: https://www.rfc-editor.org/rfc/rfc9959.html
+    /// [`set_careful_resume_params()`]: struct.Connection.html#method.set_careful_resume_params
     /// [`Bbr2Gcongestion`]: enum.CongestionControlAlgorithm.html#variant.Bbr2Gcongestion
     pub careful_resume_observation: Option<CarefulResumeParams>,
 }
