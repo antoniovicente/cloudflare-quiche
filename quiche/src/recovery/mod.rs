@@ -357,6 +357,10 @@ pub trait RecoveryOps {
     fn get_updated_qlog_cc_state(&mut self, now: Instant)
         -> Option<&'static str>;
 
+    /// Returns the next pending Careful Resume phase transition qlog event.
+    #[cfg(feature = "qlog")]
+    fn next_careful_resume_qlog_event(&mut self) -> Option<EventData>;
+
     fn send_quantum(&self) -> usize;
 
     fn get_next_release_time(&self) -> ReleaseDecision;
@@ -391,6 +395,10 @@ impl Recovery {
                 },
             );
 
+            qlog.add_event_data_with_instant(ev_data, now).ok();
+        }
+
+        while let Some(ev_data) = self.next_careful_resume_qlog_event() {
             qlog.add_event_data_with_instant(ev_data, now).ok();
         }
     }

@@ -1235,6 +1235,13 @@ impl RecoveryOps for GRecovery {
         }
     }
 
+    #[cfg(feature = "qlog")]
+    fn next_careful_resume_qlog_event(&mut self) -> Option<EventData> {
+        let update = self.pacer.next_careful_resume_qlog_update()?;
+
+        Some(update.to_qlog_event_data(self.cwnd() as u64))
+    }
+
     fn send_quantum(&self) -> usize {
         let pacing_rate = self
             .pacer

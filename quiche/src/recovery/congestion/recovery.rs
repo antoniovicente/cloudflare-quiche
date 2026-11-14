@@ -1019,6 +1019,12 @@ impl RecoveryOps for LegacyRecovery {
     }
 
     // FIXME only used by gcongestion
+    #[cfg(feature = "qlog")]
+    fn next_careful_resume_qlog_event(&mut self) -> Option<EventData> {
+        None
+    }
+
+    // FIXME only used by gcongestion
     fn on_app_limited(&mut self) {
         // Not implemented for legacy recovery, update_app_limited and
         // delivery_rate_update_app_limited used instead.

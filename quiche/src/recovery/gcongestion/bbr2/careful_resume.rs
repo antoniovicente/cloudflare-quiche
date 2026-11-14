@@ -46,11 +46,15 @@
 //!
 //! [RFC 9959]: https://www.rfc-editor.org/rfc/rfc9959.html
 
+#[cfg(feature = "qlog")]
+use std::collections::VecDeque;
 use std::time::Duration;
 use std::time::Instant;
 
 use crate::recovery::careful_resume::CarefulResumeParams;
 use crate::recovery::careful_resume::CarefulResumePhase;
+#[cfg(feature = "qlog")]
+use crate::recovery::careful_resume::CarefulResumePhaseUpdate;
 use crate::recovery::careful_resume::CarefulResumeStats;
 use crate::recovery::careful_resume::CarefulResumeTrigger;
 use crate::recovery::gcongestion::Bandwidth;
@@ -105,6 +109,7 @@ struct Unvalidated {
 #[derive(Debug)]
 struct Validating {
     pipe_size: PipeSize,
+    first_pkt: u64,
     last_pkt: u64,
     probing_rate: Bandwidth,
 }
@@ -112,6 +117,9 @@ struct Validating {
 #[derive(Debug)]
 struct SafeRetreat {
     pipe_size: PipeSize,
+    /// Packet number of the first unvalidated packet, only used for logging.
+    #[cfg(feature = "qlog")]
+    first_pkt: Option<u64>,
     last_pkt: Option<u64>,
     /// Upper bound for the congestion window. This never increases.
     cwnd_cap: usize,
@@ -134,6 +142,26 @@ impl State {
             State::Validating(_) => CarefulResumePhase::Validating,
             State::SafeRetreat(_) => CarefulResumePhase::SafeRetreat,
             State::Normal => CarefulResumePhase::Normal,
+        }
+    }
+
+    #[cfg(feature = "qlog")]
+    fn pipe_size(&self) -> usize {
+        match self {
+            State::Reconnaissance | State::Normal => 0,
+            State::Unvalidated(s) => s.pipe_size.get(),
+            State::Validating(s) => s.pipe_size.get(),
+            State::SafeRetreat(s) => s.pipe_size.get(),
+        }
+    }
+
+    #[cfg(feature = "qlog")]
+    fn unvalidated_pkts(&self) -> (Option<u64>, Option<u64>) {
+        match self {
+            State::Reconnaissance | State::Normal => (None, None),
+            State::Unvalidated(s) => (s.first_pkt, s.last_pkt),
+            State::Validating(s) => (Some(s.first_pkt), Some(s.last_pkt)),
+            State::SafeRetreat(s) => (s.first_pkt, s.last_pkt),
         }
     }
 }
@@ -193,6 +221,9 @@ pub(super) struct CarefulResume {
     trigger: Option<CarefulResumeTrigger>,
     safe_retreat_entered: bool,
     largest_acked: Option<u64>,
+
+    #[cfg(feature = "qlog")]
+    qlog_updates: VecDeque<CarefulResumePhaseUpdate>,
 }
 
 impl CarefulResume {
@@ -203,13 +234,20 @@ impl CarefulResume {
             return None;
         }
 
-        Some(CarefulResume {
+        let mut cr = CarefulResume {
             saved,
             state: State::Reconnaissance,
             trigger: None,
             safe_retreat_entered: false,
             largest_acked: None,
-        })
+
+            #[cfg(feature = "qlog")]
+            qlog_updates: VecDeque::new(),
+        };
+
+        cr.record_update(None, None);
+
+        Some(cr)
     }
 
     pub(super) fn phase(&self) -> CarefulResumePhase {
@@ -249,6 +287,13 @@ impl CarefulResume {
         matches!(self.state, State::SafeRetreat(_)) && in_drain
     }
 
+    #[cfg(feature = "qlog")]
+    pub(super) fn next_qlog_update(
+        &mut self,
+    ) -> Option<CarefulResumePhaseUpdate> {
+        self.qlog_updates.pop_front()
+    }
+
     fn transition(&mut self, new: State, trigger: Option<CarefulResumeTrigger>) {
         let old = self.state.phase();
 
@@ -265,6 +310,33 @@ impl CarefulResume {
 
         self.state = new;
         self.trigger = trigger;
+
+        self.record_update(Some(old), trigger);
+    }
+
+    #[cfg(feature = "qlog")]
+    fn record_update(
+        &mut self, old: Option<CarefulResumePhase>,
+        trigger: Option<CarefulResumeTrigger>,
+    ) {
+        let (first, last) = self.state.unvalidated_pkts();
+
+        self.qlog_updates.push_back(CarefulResumePhaseUpdate {
+            old,
+            new: self.state.phase(),
+            trigger,
+            pipe_size: self.state.pipe_size() as u64,
+            first_unvalidated_packet: first.unwrap_or(0),
+            last_unvalidated_packet: last.unwrap_or(0),
+            restored: old.is_none().then_some(self.saved),
+        });
+    }
+
+    #[cfg(not(feature = "qlog"))]
+    fn record_update(
+        &mut self, _old: Option<CarefulResumePhase>,
+        _trigger: Option<CarefulResumeTrigger>,
+    ) {
     }
 
     /// Whether `min_rtt` is consistent with the saved RTT (RFC 9959, Section
@@ -538,7 +610,7 @@ impl CarefulResume {
         let pipe_size = s.pipe_size;
 
         match (s.first_pkt, s.last_pkt) {
-            (Some(_), Some(last_pkt))
+            (Some(first_pkt), Some(last_pkt))
                 if flight_size >= initial_cwnd &&
                     flight_size > pipe_size.get() =>
             {
@@ -547,6 +619,7 @@ impl CarefulResume {
                 self.transition(
                     State::Validating(Validating {
                         pipe_size,
+                        first_pkt,
                         last_pkt,
                         probing_rate,
                     }),
@@ -572,12 +645,17 @@ impl CarefulResume {
     fn enter_safe_retreat(
         &mut self, trigger: Option<CarefulResumeTrigger>, cc: &CongestionContext,
     ) -> Action {
-        let (pipe_size, last_pkt) = match &self.state {
-            State::Unvalidated(s) => (s.pipe_size, s.last_pkt),
-            State::Validating(s) => (s.pipe_size, Some(s.last_pkt)),
+        let (pipe_size, first_pkt, last_pkt) = match &self.state {
+            State::Unvalidated(s) => (s.pipe_size, s.first_pkt, s.last_pkt),
+            State::Validating(s) =>
+                (s.pipe_size, Some(s.first_pkt), Some(s.last_pkt)),
             State::Reconnaissance | State::SafeRetreat(_) | State::Normal =>
                 return Action::None,
         };
+
+        // The first unvalidated packet is only needed for logging.
+        #[cfg(not(feature = "qlog"))]
+        let _ = first_pkt;
 
         // Reduce the congestion window to no more than half the PipeSize, to
         // allow other flows to regain their share of the capacity.
@@ -586,6 +664,8 @@ impl CarefulResume {
         self.transition(
             State::SafeRetreat(SafeRetreat {
                 pipe_size,
+                #[cfg(feature = "qlog")]
+                first_pkt,
                 last_pkt,
                 cwnd_cap,
             }),
@@ -1176,5 +1256,44 @@ mod tests {
 
         // 10 KB of capacity is below 4 * IW.
         assert_eq!(observation(bw, Some(RTT / 10), IW), None);
+    }
+
+    #[cfg(feature = "qlog")]
+    #[test]
+    fn qlog_updates() {
+        let mut cr = CarefulResume::new(saved()).unwrap();
+        let now = Instant::now();
+
+        let update = cr.next_qlog_update().unwrap();
+        assert_eq!(update.old, None);
+        assert_eq!(update.new, CarefulResumePhase::Reconnaissance);
+        assert_eq!(update.restored, Some(saved()));
+        assert!(cr.next_qlog_update().is_none());
+
+        enter_unvalidated(&mut cr, now);
+        cr.on_packet_sent(10, MSS, 1000 * MSS, MSS, IW);
+        cr.on_packet_sent(11, 2 * MSS, 1000 * MSS, MSS, IW);
+
+        let update = cr.next_qlog_update().unwrap();
+        assert_eq!(update.old, Some(CarefulResumePhase::Reconnaissance));
+        assert_eq!(update.new, CarefulResumePhase::Unvalidated);
+        assert_eq!(update.restored, None);
+        assert_eq!(update.pipe_size, 0);
+
+        cr.on_congestion_event(
+            &CongestionEventInfo {
+                largest_acked: Some(11),
+                bytes_acked: 2 * MSS,
+                bytes_lost: 0,
+                bytes_in_flight: 0,
+                ..ev(now + RTT)
+            },
+            &cc(true, false, 1000 * MSS),
+        );
+
+        let update = cr.next_qlog_update().unwrap();
+        assert_eq!(update.new, CarefulResumePhase::Normal);
+        assert_eq!(update.trigger, Some(CarefulResumeTrigger::RateLimited));
+        assert!(cr.next_qlog_update().is_none());
     }
 }

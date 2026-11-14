@@ -43,6 +43,8 @@ use std::time::Instant;
 use network_model::BBRv2NetworkModel;
 
 use crate::recovery::careful_resume::CarefulResumeParams;
+#[cfg(feature = "qlog")]
+use crate::recovery::careful_resume::CarefulResumePhaseUpdate;
 use crate::recovery::careful_resume::CarefulResumeStats;
 use crate::recovery::gcongestion::Bandwidth;
 use crate::recovery::RecoveryStats;
@@ -711,6 +713,13 @@ impl BBRv2 {
             rtt_stats.min_rtt(),
             self.initial_cwnd,
         )
+    }
+
+    #[cfg(feature = "qlog")]
+    pub(crate) fn next_careful_resume_qlog_update(
+        &mut self,
+    ) -> Option<CarefulResumePhaseUpdate> {
+        self.careful_resume.as_mut()?.next_qlog_update()
     }
 
     fn careful_resume_context(&self) -> CarefulResumeContext {

@@ -169,6 +169,90 @@ pub struct CarefulResumeStats {
     pub safe_retreat_entered: bool,
 }
 
+/// A recorded Careful Resume phase transition, used to generate qlog events.
+#[cfg(feature = "qlog")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CarefulResumePhaseUpdate {
+    pub old: Option<CarefulResumePhase>,
+    pub new: CarefulResumePhase,
+    pub trigger: Option<CarefulResumeTrigger>,
+    pub pipe_size: u64,
+    pub first_unvalidated_packet: u64,
+    pub last_unvalidated_packet: u64,
+    pub restored: Option<CarefulResumeParams>,
+}
+
+#[cfg(feature = "qlog")]
+impl CarefulResumePhase {
+    pub(crate) fn to_qlog(self) -> qlog::events::quic::CarefulResumePhase {
+        use qlog::events::quic::CarefulResumePhase as Q;
+
+        match self {
+            CarefulResumePhase::Reconnaissance => Q::Reconnaissance,
+            CarefulResumePhase::Unvalidated => Q::Unvalidated,
+            CarefulResumePhase::Validating => Q::Validating,
+            CarefulResumePhase::SafeRetreat => Q::SafeRetreat,
+            CarefulResumePhase::Normal => Q::Normal,
+        }
+    }
+}
+
+#[cfg(feature = "qlog")]
+impl CarefulResumeTrigger {
+    pub(crate) fn to_qlog(
+        self,
+    ) -> qlog::events::quic::CarefulResumePhaseUpdatedTrigger {
+        use qlog::events::quic::CarefulResumePhaseUpdatedTrigger as Q;
+
+        match self {
+            CarefulResumeTrigger::CongestionWindowLimited =>
+                Q::CongestionWindowLimited,
+            CarefulResumeTrigger::RttExceeded => Q::RttExceeded,
+            CarefulResumeTrigger::FirstUnvalidatedPacketAcknowledged =>
+                Q::FirstUnvalidatedPacketAcknowledged,
+            CarefulResumeTrigger::LastUnvalidatedPacketSent =>
+                Q::LastUnvalidatedPacketSent,
+            CarefulResumeTrigger::LastUnvalidatedPacketAcknowledged =>
+                Q::LastUnvalidatedPacketAcknowledged,
+            CarefulResumeTrigger::RttNotValidated => Q::RttNotValidated,
+            CarefulResumeTrigger::RateLimited => Q::RateLimited,
+            CarefulResumeTrigger::PathChanged => Q::PathChanged,
+            CarefulResumeTrigger::PacketLoss => Q::PacketLoss,
+            CarefulResumeTrigger::ExitRecovery => Q::ExitRecovery,
+        }
+    }
+}
+
+#[cfg(feature = "qlog")]
+impl CarefulResumePhaseUpdate {
+    /// Converts the update to a qlog event, given the congestion window after
+    /// the transition.
+    pub(crate) fn to_qlog_event_data(self, cwnd: u64) -> qlog::events::EventData {
+        use qlog::events::quic;
+
+        qlog::events::EventData::QuicCarefulResumePhaseUpdated(
+            quic::CarefulResumePhaseUpdated {
+                old: self.old.map(CarefulResumePhase::to_qlog),
+                new: self.new.to_qlog(),
+                state_data: quic::CarefulResumeStateParameters {
+                    pipesize: self.pipe_size,
+                    first_unvalidated_packet: self.first_unvalidated_packet,
+                    last_unvalidated_packet: self.last_unvalidated_packet,
+                    congestion_window: Some(cwnd),
+                    ssthresh: None,
+                },
+                restored_data: self.restored.map(|p| {
+                    quic::CarefulResumeRestoredParameters {
+                        saved_congestion_window: p.saved_cwnd(),
+                        saved_rtt: p.min_rtt.as_secs_f32() * 1000.0,
+                    }
+                }),
+                trigger: self.trigger.map(CarefulResumeTrigger::to_qlog),
+            },
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,6 +572,60 @@ mod tests {
         // The resumed congestion window and pacing rate are not retained.
         assert!(r.cwnd() < 100 * MSS);
         assert!(r.pacing_rate() < SAVED.bandwidth / 2);
+    }
+
+    #[cfg(feature = "qlog")]
+    #[test]
+    fn resume_qlog_events() {
+        use qlog::events::quic;
+        use qlog::events::EventData;
+
+        let mut r = new_recovery("bbr2_gcongestion", true, Some(SAVED));
+
+        let now = reconnaissance(&mut r, RTT);
+        send(&mut r, 20..120, now);
+        ack(&mut r, 20..21, now + RTT);
+        ack(&mut r, 21..120, now + RTT);
+
+        let events: Vec<_> =
+            std::iter::from_fn(|| r.next_careful_resume_qlog_event())
+                .map(|ev| match ev {
+                    EventData::QuicCarefulResumePhaseUpdated(ev) => ev,
+                    _ => panic!("unexpected event"),
+                })
+                .collect();
+
+        assert_eq!(events.len(), 4);
+
+        assert_eq!(events[0].old, None);
+        assert_eq!(events[0].new, quic::CarefulResumePhase::Reconnaissance);
+        assert_eq!(
+            events[0].restored_data,
+            Some(quic::CarefulResumeRestoredParameters {
+                saved_congestion_window: SAVED.saved_cwnd(),
+                saved_rtt: 100.0,
+            })
+        );
+
+        assert_eq!(events[1].new, quic::CarefulResumePhase::Unvalidated);
+        assert_eq!(
+            events[1].trigger,
+            Some(quic::CarefulResumePhaseUpdatedTrigger::CongestionWindowLimited)
+        );
+        assert_eq!(events[1].restored_data, None);
+
+        assert_eq!(events[2].new, quic::CarefulResumePhase::Validating);
+        assert_eq!(events[2].state_data.first_unvalidated_packet, 20);
+        assert_eq!(events[2].state_data.last_unvalidated_packet, 119);
+
+        assert_eq!(events[3].old, Some(quic::CarefulResumePhase::Validating));
+        assert_eq!(events[3].new, quic::CarefulResumePhase::Normal);
+        assert_eq!(
+            events[3].trigger,
+            Some(
+                quic::CarefulResumePhaseUpdatedTrigger::LastUnvalidatedPacketAcknowledged
+            )
+        );
     }
 
     #[test]

@@ -30,6 +30,8 @@
 
 use std::time::Instant;
 
+#[cfg(feature = "qlog")]
+use crate::recovery::careful_resume::CarefulResumePhaseUpdate;
 use crate::recovery::gcongestion::bbr2::BBRv2;
 use crate::recovery::gcongestion::Bandwidth;
 use crate::recovery::gcongestion::CongestionControl;
@@ -271,6 +273,13 @@ impl Pacer {
         &self, rtt_stats: &RttStats,
     ) -> Option<CarefulResumeParams> {
         self.sender.careful_resume_observation(rtt_stats)
+    }
+
+    #[cfg(feature = "qlog")]
+    pub fn next_careful_resume_qlog_update(
+        &mut self,
+    ) -> Option<CarefulResumePhaseUpdate> {
+        self.sender.next_careful_resume_qlog_update()
     }
 
     #[cfg(feature = "qlog")]
