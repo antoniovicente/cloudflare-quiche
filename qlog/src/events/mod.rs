@@ -253,6 +253,9 @@ impl From<EventType> for EventImportance {
                 EventImportance::Core,
             EventType::QuicEventType(QuicEventType::CongestionStateUpdated) =>
                 EventImportance::Base,
+            EventType::QuicEventType(
+                QuicEventType::CarefulResumePhaseUpdated,
+            ) => EventImportance::Extra,
             EventType::QuicEventType(QuicEventType::TimerUpdated) =>
                 EventImportance::Extra,
             EventType::QuicEventType(QuicEventType::PacketLost) =>
@@ -366,6 +369,8 @@ impl From<&EventData> for EventType {
                 EventType::QuicEventType(QuicEventType::RecoveryMetricsUpdated),
             EventData::QuicCongestionStateUpdated { .. } =>
                 EventType::QuicEventType(QuicEventType::CongestionStateUpdated),
+            EventData::QuicCarefulResumePhaseUpdated { .. } =>
+                EventType::QuicEventType(QuicEventType::CarefulResumePhaseUpdated),
             EventData::QuicTimerUpdated { .. } =>
                 EventType::QuicEventType(QuicEventType::TimerUpdated),
             EventData::QuicPacketLost { .. } =>
@@ -544,6 +549,9 @@ pub enum EventData {
 
     #[serde(rename = "quic:ecn_state_updated")]
     QuicEcnStateUpdated(quic::EcnStateUpdated),
+
+    #[serde(rename = "quic:careful_resume_phase_updated")]
+    QuicCarefulResumePhaseUpdated(quic::CarefulResumePhaseUpdated),
 
     // HTTP/3
     #[serde(rename = "http3:parameters_set")]

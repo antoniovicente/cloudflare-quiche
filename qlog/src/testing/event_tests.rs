@@ -431,3 +431,97 @@ fn ack_frame_deserialize_mixed_input() {
         raw: None,
     });
 }
+
+#[test]
+fn careful_resume_phase_updated() {
+    use crate::events::quic::CarefulResumePhase;
+    use crate::events::quic::CarefulResumePhaseUpdated;
+    use crate::events::quic::CarefulResumePhaseUpdatedTrigger;
+    use crate::events::quic::CarefulResumeRestoredParameters;
+    use crate::events::quic::CarefulResumeStateParameters;
+    use crate::events::EventImportance;
+    use crate::events::EventType;
+
+    let ev_data =
+        EventData::QuicCarefulResumePhaseUpdated(CarefulResumePhaseUpdated {
+            old: None,
+            new: CarefulResumePhase::Reconnaissance,
+            state_data: CarefulResumeStateParameters {
+                congestion_window: Some(12000),
+                ..Default::default()
+            },
+            restored_data: Some(CarefulResumeRestoredParameters {
+                saved_congestion_window: 1_200_000,
+                saved_rtt: 100.0,
+            }),
+            trigger: None,
+        });
+
+    let ev = Event::with_time(0.0, ev_data);
+
+    pretty_assertions::assert_eq!(
+        serde_json::to_value(&ev).unwrap(),
+        serde_json::json!({
+            "time": 0.0,
+            "name": "quic:careful_resume_phase_updated",
+            "data": {
+                "new": "reconnaissance",
+                "state_data": {
+                    "pipesize": 0,
+                    "first_unvalidated_packet": 0,
+                    "last_unvalidated_packet": 0,
+                    "congestion_window": 12000
+                },
+                "restored_data": {
+                    "saved_congestion_window": 1200000,
+                    "saved_rtt": 100.0
+                }
+            }
+        })
+    );
+
+    let ev_data =
+        EventData::QuicCarefulResumePhaseUpdated(CarefulResumePhaseUpdated {
+            old: Some(CarefulResumePhase::Validating),
+            new: CarefulResumePhase::SafeRetreat,
+            state_data: CarefulResumeStateParameters {
+                pipesize: 63000,
+                first_unvalidated_packet: 30,
+                last_unvalidated_packet: 150,
+                congestion_window: Some(31500),
+                ssthresh: None,
+            },
+            restored_data: None,
+            trigger: Some(CarefulResumePhaseUpdatedTrigger::EcnCe),
+        });
+
+    let ev = Event::with_time(1.0, ev_data);
+    let json = serde_json::to_value(&ev).unwrap();
+
+    pretty_assertions::assert_eq!(
+        json,
+        serde_json::json!({
+            "time": 1.0,
+            "name": "quic:careful_resume_phase_updated",
+            "data": {
+                "old": "validating",
+                "new": "safe_retreat",
+                "state_data": {
+                    "pipesize": 63000,
+                    "first_unvalidated_packet": 30,
+                    "last_unvalidated_packet": 150,
+                    "congestion_window": 31500
+                },
+                "trigger": "ECN_CE"
+            }
+        })
+    );
+
+    // Round trip.
+    let ev2: Event = serde_json::from_value(json).unwrap();
+    assert_eq!(ev.data, ev2.data);
+
+    let importance = EventImportance::from(EventType::from(&ev.data));
+    assert!(importance.is_contained_in(&EventImportance::Extra));
+    assert!(!importance.is_contained_in(&EventImportance::Base));
+}

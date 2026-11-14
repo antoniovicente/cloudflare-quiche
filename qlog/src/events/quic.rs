@@ -331,6 +331,8 @@ pub enum QuicEventType {
     PacketLost,
     MarkedForRetransmit,
     EcnStateUpdated,
+
+    CarefulResumePhaseUpdated,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -1104,6 +1106,67 @@ pub enum EcnState {
 pub struct EcnStateUpdated {
     pub old: Option<EcnState>,
     pub new: EcnState,
+}
+
+/// Careful Resume phases, as defined in
+/// draft-ietf-tsvwg-careful-resume-qlog.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CarefulResumePhase {
+    #[default]
+    Reconnaissance,
+    Unvalidated,
+    Validating,
+    Normal,
+    SafeRetreat,
+}
+
+/// Triggers of Careful Resume phase transitions, as defined in
+/// draft-ietf-tsvwg-careful-resume-qlog.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum CarefulResumePhaseUpdatedTrigger {
+    CongestionWindowLimited,
+    RttExceeded,
+    FirstUnvalidatedPacketAcknowledged,
+    LastUnvalidatedPacketSent,
+    LastUnvalidatedPacketAcknowledged,
+    RttNotValidated,
+    RateLimited,
+    PathChanged,
+    PacketLoss,
+    #[serde(rename = "ECN_CE")]
+    EcnCe,
+    ExitRecovery,
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Default)]
+pub struct CarefulResumeStateParameters {
+    pub pipesize: u64,
+    pub first_unvalidated_packet: u64,
+    pub last_unvalidated_packet: u64,
+    pub congestion_window: Option<u64>,
+    pub ssthresh: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct CarefulResumeRestoredParameters {
+    pub saved_congestion_window: u64,
+    /// The saved RTT in milliseconds.
+    pub saved_rtt: f32,
+}
+
+/// The `quic:careful_resume_phase_updated` event, as defined in
+/// draft-ietf-tsvwg-careful-resume-qlog.
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct CarefulResumePhaseUpdated {
+    pub old: Option<CarefulResumePhase>,
+    pub new: CarefulResumePhase,
+    pub state_data: CarefulResumeStateParameters,
+    pub restored_data: Option<CarefulResumeRestoredParameters>,
+    pub trigger: Option<CarefulResumePhaseUpdatedTrigger>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Default)]
