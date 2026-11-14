@@ -50,4 +50,7 @@ mod pacer;
 mod recovery;
 mod windowed_filter;
 
+#[cfg(test)]
+mod sim;
+
 pub(crate) use self::recovery::VRecovery;

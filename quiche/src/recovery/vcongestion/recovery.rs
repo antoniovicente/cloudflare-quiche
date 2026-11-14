@@ -675,6 +675,11 @@ impl VRecovery {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn bbr(&self) -> &Bbr {
+        &self.bbr
+    }
+
     #[cfg(any(test, feature = "qlog"))]
     fn pacing_rate_bw(&self) -> Bandwidth {
         self.pacer.effective_rate(self.bbr.pacing_rate())
