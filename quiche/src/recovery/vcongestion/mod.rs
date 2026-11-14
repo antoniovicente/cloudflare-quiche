@@ -36,16 +36,18 @@
 //! * `pacer`: pacing with a send quantum (draft Sections 5.6.2 and 5.6.3, RFC
 //!   9002 Section 7.7).
 //! * `windowed_filter`: windowed max filters (draft Sections 5.5.5 and 5.5.9).
+//! * `recovery`: loss detection (RFC 9002 Section 6 and Appendix A) and the
+//!   mapping of QUIC loss recovery events onto BBR (RFC 9002 Section 7).
 //!
 //! References:
 //!
 //! * <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.txt>
 //! * <https://www.rfc-editor.org/rfc/rfc9002.html>
 
-// The module isn't used by `Recovery` until `VRecovery` is added.
-#![allow(dead_code)]
-
 mod bbr;
 mod delivery_rate;
 mod pacer;
+mod recovery;
 mod windowed_filter;
+
+pub(crate) use self::recovery::VRecovery;

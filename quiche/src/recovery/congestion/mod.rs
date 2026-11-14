@@ -331,6 +331,8 @@ impl From<CongestionControlAlgorithm> for &'static CongestionControlOps {
             // LegacyRecovery never gets a RecoveryConfig with the
             // Bbr2Gcongestion algorithm.
             CongestionControlAlgorithm::Bbr2Gcongestion => unreachable!(),
+            // Likewise, Vbbr is routed to the vcongestion implementation.
+            CongestionControlAlgorithm::Vbbr => unreachable!(),
             #[cfg(feature = "congestion_window_unchecked_available")]
             CongestionControlAlgorithm::CongestionWindowUnchecked =>
                 &CONGESTION_WINDOW_UNCHECKED,

@@ -44,6 +44,7 @@ use smallvec::SmallVec;
 
 use self::congestion::recovery::LegacyRecovery;
 use self::gcongestion::GRecovery;
+use self::vcongestion::VRecovery;
 pub use gcongestion::BbrBwLoReductionStrategy;
 pub use gcongestion::BbrParams;
 #[cfg(feature = "internal")]
@@ -180,6 +181,7 @@ impl RecoveryConfig {
 pub(crate) enum Recovery {
     Legacy(LegacyRecovery),
     GCongestion(GRecovery),
+    VCongestion(VRecovery),
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -341,6 +343,10 @@ pub trait RecoveryOps {
 
 impl Recovery {
     pub fn new_with_config(recovery_config: &RecoveryConfig) -> Self {
+        if let Some(vrecovery) = VRecovery::new(recovery_config) {
+            return Recovery::from(vrecovery);
+        }
+
         let grecovery = GRecovery::new(recovery_config);
         if let Some(grecovery) = grecovery {
             Recovery::from(grecovery)
@@ -416,6 +422,11 @@ pub enum CongestionControlAlgorithm {
         doc(cfg(feature = "congestion_window_unchecked_available"))
     )]
     CongestionWindowUnchecked = 5,
+    /// BBR (version 3) congestion control algorithm implemented from
+    /// [draft-ietf-ccwg-bbr-07]. `vbbr` in a string form.
+    ///
+    /// [draft-ietf-ccwg-bbr-07]: https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.txt
+    Vbbr            = 6,
 }
 
 impl FromStr for CongestionControlAlgorithm {
@@ -431,6 +442,7 @@ impl FromStr for CongestionControlAlgorithm {
             "bbr" => Ok(CongestionControlAlgorithm::Bbr2Gcongestion),
             "bbr2" => Ok(CongestionControlAlgorithm::Bbr2Gcongestion),
             "bbr2_gcongestion" => Ok(CongestionControlAlgorithm::Bbr2Gcongestion),
+            "vbbr" => Ok(CongestionControlAlgorithm::Vbbr),
             #[cfg(feature = "congestion_window_unchecked_available")]
             "congestion_window_unchecked" =>
                 Ok(CongestionControlAlgorithm::CongestionWindowUnchecked),
@@ -986,6 +998,11 @@ mod tests {
         let algo =
             CongestionControlAlgorithm::from_str("bbr2_gcongestion").unwrap();
         assert_eq!(algo, CongestionControlAlgorithm::Bbr2Gcongestion);
+        assert!(recovery_for_alg(algo).gcongestion_enabled());
+
+        // vbbr paces with release times, like gcongestion.
+        let algo = CongestionControlAlgorithm::from_str("vbbr").unwrap();
+        assert_eq!(algo, CongestionControlAlgorithm::Vbbr);
         assert!(recovery_for_alg(algo).gcongestion_enabled());
     }
 
