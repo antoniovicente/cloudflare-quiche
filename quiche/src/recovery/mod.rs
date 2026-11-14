@@ -1098,7 +1098,7 @@ mod tests {
 
     #[rstest]
     fn unchecked_window_configuration_does_not_change_other_algorithms(
-        #[values("reno", "cubic", "bbr2_gcongestion")] algorithm: &str,
+        #[values("reno", "cubic", "bbr2_gcongestion", "vbbr")] algorithm: &str,
     ) {
         let mut config = Config::new(crate::PROTOCOL_VERSION)
             .expect("create transport configuration");
@@ -1148,6 +1148,7 @@ mod tests {
     #[case::reno("reno")]
     #[case::cubic("cubic")]
     #[case::bbr2_gcongestion("bbr2_gcongestion")]
+    #[case::vbbr("vbbr")]
     #[cfg_attr(
         feature = "congestion_window_unchecked_available",
         case::congestion_window_unchecked("congestion_window_unchecked")
@@ -1439,6 +1440,7 @@ mod tests {
     #[case::reno("reno")]
     #[case::cubic("cubic")]
     #[case::bbr2_gcongestion("bbr2_gcongestion")]
+    #[case::vbbr("vbbr")]
     #[cfg_attr(
         feature = "congestion_window_unchecked_available",
         case::congestion_window_unchecked("congestion_window_unchecked")
@@ -1640,6 +1642,7 @@ mod tests {
     #[case::reno("reno")]
     #[case::cubic("cubic")]
     #[case::bbr2_gcongestion("bbr2_gcongestion")]
+    #[case::vbbr("vbbr")]
     #[cfg_attr(
         feature = "congestion_window_unchecked_available",
         case::congestion_window_unchecked("congestion_window_unchecked")
@@ -2681,7 +2684,7 @@ mod tests {
 
     #[rstest]
     fn pmtud_loss_on_timer(
-        #[values("reno", "cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("reno", "cubic", "bbr2_gcongestion", "vbbr")] cc_algorithm_name: &str,
     ) {
         let mut cfg = Config::new(crate::PROTOCOL_VERSION).unwrap();
         assert_eq!(cfg.set_cc_algorithm_name(cc_algorithm_name), Ok(()));
@@ -2823,11 +2826,26 @@ mod tests {
         r.on_loss_detection_timeout(HandshakeStatus::default(), now, "");
         assert_eq!(r.loss_probes(packet::Epoch::Application), 0);
 
-        assert_eq!(r.sent_packets_len(packet::Epoch::Application), 2);
+        // vbbr removes handled packets from the front of the queue after
+        // timer based loss detection too, and doesn't retain lost PMTUD
+        // probes since they aren't congestion signals.
+        let expected_sent_packets_len =
+            if cc_algorithm_name == "vbbr" { 0 } else { 2 };
+        assert_eq!(
+            r.sent_packets_len(packet::Epoch::Application),
+            expected_sent_packets_len
+        );
         assert_eq!(r.in_flight_count(packet::Epoch::Application), 0);
         assert_eq!(r.bytes_in_flight(), 0);
         assert_eq!(r.bytes_in_flight_duration(), Duration::from_micros(11250));
-        assert_eq!(r.cwnd(), 12000);
+        // vbbr grows cwnd by the 2000 newly acked bytes in Startup
+        // (draft-ietf-ccwg-bbr-07 Section 5.6.4.6, SetCwnd()).
+        let expected_cwnd = if cc_algorithm_name == "vbbr" {
+            14000
+        } else {
+            12000
+        };
+        assert_eq!(r.cwnd(), expected_cwnd);
 
         assert_eq!(r.lost_count(), 0);
 
@@ -3074,7 +3092,7 @@ mod tests {
     }
     #[rstest]
     fn pto_overflow_reproduction(
-        #[values("reno", "cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("reno", "cubic", "bbr2_gcongestion", "vbbr")] cc_algorithm_name: &str,
     ) {
         let mut cfg = Config::new(crate::PROTOCOL_VERSION).unwrap();
         assert_eq!(cfg.set_cc_algorithm_name(cc_algorithm_name), Ok(()));
@@ -3174,7 +3192,7 @@ mod tests {
     // This validates the fix: `if epoch.lost_frames.is_empty()` guard.
     #[rstest]
     fn pto_does_not_duplicate_frames_on_consecutive_timeouts(
-        #[values("reno", "cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("reno", "cubic", "bbr2_gcongestion", "vbbr")] cc_algorithm_name: &str,
     ) {
         let mut cfg = Config::new(crate::PROTOCOL_VERSION).unwrap();
         assert_eq!(cfg.set_cc_algorithm_name(cc_algorithm_name), Ok(()));
@@ -3273,7 +3291,7 @@ mod tests {
     // and doesn't mark packets as lost (lost_count should remain 0).
     #[rstest]
     fn pto_send_on_path_retransmits_without_loss(
-        #[values("reno", "cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("reno", "cubic", "bbr2_gcongestion", "vbbr")] cc_algorithm_name: &str,
     ) {
         use crate::test_utils;
 

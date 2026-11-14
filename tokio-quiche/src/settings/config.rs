@@ -336,6 +336,7 @@ mod tests {
             "reno",
             "cubic",
             "bbr2_gcongestion",
+            "vbbr",
             "congestion_window_unchecked",
         ] {
             let unsupported_algorithm =

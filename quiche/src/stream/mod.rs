@@ -1285,7 +1285,7 @@ mod tests {
 
     #[rstest]
     fn collected_streams_out_of_order(
-        #[values("cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("cubic", "bbr2_gcongestion", "vbbr")] cc_algorithm_name: &str,
         #[values(0, 2)] stream_type: u64,
     ) {
         let mut pipe = Pipe::new(cc_algorithm_name).unwrap();
@@ -1333,7 +1333,7 @@ mod tests {
 
     #[rstest]
     fn collected_streams_sparse_peer_credit(
-        #[values("cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("cubic", "bbr2_gcongestion", "vbbr")] cc_algorithm_name: &str,
         #[values(0, 2)] stream_type: u64, #[values(1, 8)] initial_limit: u64,
     ) {
         let mut config = Pipe::default_config(cc_algorithm_name).unwrap();
@@ -1390,7 +1390,7 @@ mod tests {
 
     #[rstest]
     fn collected_streams_fragmented_local(
-        #[values("cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("cubic", "bbr2_gcongestion", "vbbr")] cc_algorithm_name: &str,
         #[values(0, 2)] stream_type: u64,
     ) {
         let mut client_config = Pipe::default_config(cc_algorithm_name).unwrap();
