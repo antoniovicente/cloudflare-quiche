@@ -197,15 +197,17 @@ impl State {
         }
     }
 
+    /// The state name reported in qlog `CongestionStateUpdated` events. These
+    /// match the gcongestion BBR2 names so that qlog tools treat both alike.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            State::Startup => "vbbr_startup",
-            State::Drain => "vbbr_drain",
-            State::ProbeBwDown => "vbbr_probe_bw_down",
-            State::ProbeBwCruise => "vbbr_probe_bw_cruise",
-            State::ProbeBwRefill => "vbbr_probe_bw_refill",
-            State::ProbeBwUp => "vbbr_probe_bw_up",
-            State::ProbeRtt => "vbbr_probe_rtt",
+            State::Startup => "bbr_startup",
+            State::Drain => "bbr_drain",
+            State::ProbeBwDown => "bbr_probe_bw_down",
+            State::ProbeBwCruise => "bbr_probe_bw_cruise",
+            State::ProbeBwRefill => "bbr_probe_bw_refill",
+            State::ProbeBwUp => "bbr_probe_bw_up",
+            State::ProbeRtt => "bbr_probe_rtt",
         }
     }
 }
