@@ -355,7 +355,7 @@ fn on_packet_acked(
 
 fn congestion_event(
     r: &mut Congestion, bytes_in_flight: usize, _lost_bytes: usize,
-    largest_lost_pkt: &Sent, now: Instant,
+    largest_lost_pkt: &Sent, now: Instant, _rtt_stats: &RttStats,
 ) {
     let time_sent = largest_lost_pkt.time_sent;
     let in_congestion_recovery = r.in_congestion_recovery(time_sent);

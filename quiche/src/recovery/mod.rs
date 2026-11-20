@@ -416,6 +416,12 @@ pub enum CongestionControlAlgorithm {
         doc(cfg(feature = "congestion_window_unchecked_available"))
     )]
     CongestionWindowUnchecked = 5,
+    /// Cuback, an ACK-driven reformulation of CUBIC congestion control
+    /// ([draft-kazuho-ccwg-cuback]). Slow start uses HyStart++ when enabled.
+    /// `cuback` in a string form.
+    ///
+    /// [draft-kazuho-ccwg-cuback]: https://datatracker.ietf.org/doc/draft-kazuho-ccwg-cuback/
+    Cuback          = 6,
 }
 
 impl FromStr for CongestionControlAlgorithm {
@@ -428,6 +434,7 @@ impl FromStr for CongestionControlAlgorithm {
         match name {
             "reno" => Ok(CongestionControlAlgorithm::Reno),
             "cubic" => Ok(CongestionControlAlgorithm::CUBIC),
+            "cuback" => Ok(CongestionControlAlgorithm::Cuback),
             "bbr" => Ok(CongestionControlAlgorithm::Bbr2Gcongestion),
             "bbr2" => Ok(CongestionControlAlgorithm::Bbr2Gcongestion),
             "bbr2_gcongestion" => Ok(CongestionControlAlgorithm::Bbr2Gcongestion),
@@ -975,6 +982,10 @@ mod tests {
         assert_eq!(algo, CongestionControlAlgorithm::CUBIC);
         assert!(!recovery_for_alg(algo).gcongestion_enabled());
 
+        let algo = CongestionControlAlgorithm::from_str("cuback").unwrap();
+        assert_eq!(algo, CongestionControlAlgorithm::Cuback);
+        assert!(!recovery_for_alg(algo).gcongestion_enabled());
+
         let algo = CongestionControlAlgorithm::from_str("bbr").unwrap();
         assert_eq!(algo, CongestionControlAlgorithm::Bbr2Gcongestion);
         assert!(recovery_for_alg(algo).gcongestion_enabled());
@@ -1081,7 +1092,7 @@ mod tests {
 
     #[rstest]
     fn unchecked_window_configuration_does_not_change_other_algorithms(
-        #[values("reno", "cubic", "bbr2_gcongestion")] algorithm: &str,
+        #[values("reno", "cubic", "cuback", "bbr2_gcongestion")] algorithm: &str,
     ) {
         let mut config = Config::new(crate::PROTOCOL_VERSION)
             .expect("create transport configuration");
@@ -1130,6 +1141,7 @@ mod tests {
     #[rstest]
     #[case::reno("reno")]
     #[case::cubic("cubic")]
+    #[case::cuback("cuback")]
     #[case::bbr2_gcongestion("bbr2_gcongestion")]
     #[cfg_attr(
         feature = "congestion_window_unchecked_available",
@@ -1410,7 +1422,7 @@ mod tests {
         );
 
         assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
-        if matches!(cc_algorithm_name, "reno" | "cubic") {
+        if matches!(cc_algorithm_name, "reno" | "cubic" | "cuback") {
             assert!(r.startup_exit().is_some());
             assert_eq!(r.startup_exit().unwrap().reason, StartupExitReason::Loss);
         } else {
@@ -1421,6 +1433,7 @@ mod tests {
     #[rstest]
     #[case::reno("reno")]
     #[case::cubic("cubic")]
+    #[case::cuback("cuback")]
     #[case::bbr2_gcongestion("bbr2_gcongestion")]
     #[cfg_attr(
         feature = "congestion_window_unchecked_available",
@@ -1611,7 +1624,7 @@ mod tests {
         );
 
         assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
-        if matches!(cc_algorithm_name, "reno" | "cubic") {
+        if matches!(cc_algorithm_name, "reno" | "cubic" | "cuback") {
             assert!(r.startup_exit().is_some());
             assert_eq!(r.startup_exit().unwrap().reason, StartupExitReason::Loss);
         } else {
@@ -1622,6 +1635,7 @@ mod tests {
     #[rstest]
     #[case::reno("reno")]
     #[case::cubic("cubic")]
+    #[case::cuback("cuback")]
     #[case::bbr2_gcongestion("bbr2_gcongestion")]
     #[cfg_attr(
         feature = "congestion_window_unchecked_available",
@@ -1745,7 +1759,7 @@ mod tests {
         );
         assert_eq!(r.sent_packets_len(packet::Epoch::Application), 0);
 
-        if matches!(cc_algorithm_name, "reno" | "cubic") {
+        if matches!(cc_algorithm_name, "reno" | "cubic" | "cuback") {
             assert!(r.startup_exit().is_some());
             assert_eq!(r.startup_exit().unwrap().reason, StartupExitReason::Loss);
         } else {
@@ -2125,7 +2139,8 @@ mod tests {
 
     #[rstest]
     fn pacing(
-        #[values("reno", "cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("reno", "cubic", "cuback", "bbr2_gcongestion")]
+        cc_algorithm_name: &str,
         #[values(false, true)] time_sent_set_to_now: bool,
     ) {
         let pacing_enabled = cc_algorithm_name == "bbr2" ||
@@ -2580,7 +2595,7 @@ mod tests {
 
     #[rstest]
     fn validate_ack_range_on_ack_received(
-        #[values("cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("cubic", "cuback", "bbr2_gcongestion")] cc_algorithm_name: &str,
     ) {
         let mut cfg = Config::new(crate::PROTOCOL_VERSION).unwrap();
         cfg.set_cc_algorithm_name(cc_algorithm_name).unwrap();
@@ -2664,7 +2679,8 @@ mod tests {
 
     #[rstest]
     fn pmtud_loss_on_timer(
-        #[values("reno", "cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("reno", "cubic", "cuback", "bbr2_gcongestion")]
+        cc_algorithm_name: &str,
     ) {
         let mut cfg = Config::new(crate::PROTOCOL_VERSION).unwrap();
         assert_eq!(cfg.set_cc_algorithm_name(cc_algorithm_name), Ok(()));
@@ -2834,7 +2850,7 @@ mod tests {
     // congestion specific algorithms.
     #[rstest]
     fn congestion_delivery_rate(
-        #[values("reno", "cubic", "bbr2")] cc_algorithm_name: &str,
+        #[values("reno", "cubic", "cuback", "bbr2")] cc_algorithm_name: &str,
     ) {
         let mut cfg = Config::new(crate::PROTOCOL_VERSION).unwrap();
         assert_eq!(cfg.set_cc_algorithm_name(cc_algorithm_name), Ok(()));
@@ -2895,6 +2911,7 @@ mod tests {
     #[rstest]
     #[case::reno("reno")]
     #[case::cubic("cubic")]
+    #[case::cuback("cuback")]
     #[case::bbr2_gcongestion("bbr2_gcongestion")]
     #[cfg_attr(
         feature = "congestion_window_unchecked_available",
@@ -3057,7 +3074,8 @@ mod tests {
     }
     #[rstest]
     fn pto_overflow_reproduction(
-        #[values("reno", "cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("reno", "cubic", "cuback", "bbr2_gcongestion")]
+        cc_algorithm_name: &str,
     ) {
         let mut cfg = Config::new(crate::PROTOCOL_VERSION).unwrap();
         assert_eq!(cfg.set_cc_algorithm_name(cc_algorithm_name), Ok(()));
@@ -3157,7 +3175,8 @@ mod tests {
     // This validates the fix: `if epoch.lost_frames.is_empty()` guard.
     #[rstest]
     fn pto_does_not_duplicate_frames_on_consecutive_timeouts(
-        #[values("reno", "cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("reno", "cubic", "cuback", "bbr2_gcongestion")]
+        cc_algorithm_name: &str,
     ) {
         let mut cfg = Config::new(crate::PROTOCOL_VERSION).unwrap();
         assert_eq!(cfg.set_cc_algorithm_name(cc_algorithm_name), Ok(()));
@@ -3256,7 +3275,8 @@ mod tests {
     // and doesn't mark packets as lost (lost_count should remain 0).
     #[rstest]
     fn pto_send_on_path_retransmits_without_loss(
-        #[values("reno", "cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+        #[values("reno", "cubic", "cuback", "bbr2_gcongestion")]
+        cc_algorithm_name: &str,
     ) {
         use crate::test_utils;
 

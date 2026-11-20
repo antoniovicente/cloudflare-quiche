@@ -335,6 +335,7 @@ mod tests {
         for algorithm in [
             "reno",
             "cubic",
+            "cuback",
             "bbr2_gcongestion",
             "congestion_window_unchecked",
         ] {

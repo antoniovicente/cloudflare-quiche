@@ -86,6 +86,8 @@ pub struct Congestion {
 
     cubic_state: cubic::State,
 
+    cuback_state: cuback::State,
+
     // HyStart++.
     pub(crate) hystart: hystart::Hystart,
 
@@ -143,6 +145,8 @@ impl Congestion {
             cc_ops: recovery_config.cc_algorithm.into(),
 
             cubic_state: cubic::State::default(),
+
+            cuback_state: cuback::State::new(initial_congestion_window),
 
             app_limited: false,
 
@@ -278,6 +282,7 @@ pub(crate) struct CongestionControlOps {
         lost_bytes: usize,
         largest_lost_packet: &Sent,
         now: Instant,
+        rtt_stats: &RttStats,
     ),
 
     pub checkpoint: fn(r: &mut Congestion),
@@ -303,7 +308,7 @@ static CONGESTION_WINDOW_UNCHECKED: CongestionControlOps = CongestionControlOps 
     on_packets_acked: |congestion, _, _, _, _| {
         reset_unchecked_congestion_window(congestion)
     },
-    congestion_event: |congestion, _, _, _, _| {
+    congestion_event: |congestion, _, _, _, _, _| {
         reset_unchecked_congestion_window(congestion)
     },
     checkpoint: reset_unchecked_congestion_window,
@@ -326,6 +331,7 @@ impl From<CongestionControlAlgorithm> for &'static CongestionControlOps {
         match algo {
             CongestionControlAlgorithm::Reno => &reno::RENO,
             CongestionControlAlgorithm::CUBIC => &cubic::CUBIC,
+            CongestionControlAlgorithm::Cuback => &cuback::CUBACK,
             // Bbr2Gcongestion is routed to the congestion implementation in
             // the gcongestion directory by Recovery::new_with_config;
             // LegacyRecovery never gets a RecoveryConfig with the
@@ -390,7 +396,15 @@ mod tests {
                 let now = Instant::now();
                 let packet = test_utils::helper_packet_sent(0, now, 1_200);
                 (congestion.cc_ops.congestion_event)(
-                    congestion, 1_200, 1_200, &packet, now,
+                    congestion,
+                    1_200,
+                    1_200,
+                    &packet,
+                    now,
+                    &RttStats::new(
+                        Duration::from_millis(100),
+                        Duration::from_millis(25),
+                    ),
                 );
             },
             |congestion| (congestion.cc_ops.checkpoint)(congestion),
@@ -455,6 +469,7 @@ mod tests {
     }
 }
 
+mod cuback;
 mod cubic;
 mod delivery_rate;
 mod hystart;

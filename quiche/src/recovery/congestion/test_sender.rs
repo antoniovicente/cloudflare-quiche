@@ -170,10 +170,15 @@ impl TestSender {
             n * bytes,
             &unacked,
             self.time,
+            &self.rtt_stats,
         );
 
         self.cc.lost_count += n;
         self.bytes_in_flight -= n * bytes;
+    }
+
+    pub(crate) fn rtt_stats(&self) -> &RttStats {
+        &self.rtt_stats
     }
 
     pub(crate) fn update_rtt(&mut self, rtt: Duration) {

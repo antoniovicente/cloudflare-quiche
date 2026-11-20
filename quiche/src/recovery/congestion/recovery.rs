@@ -550,6 +550,7 @@ impl LegacyRecovery {
                 loss.lost_bytes,
                 &pkt,
                 now,
+                &self.rtt_stats,
             );
 
             self.bytes_in_flight
